@@ -239,6 +239,183 @@ async function loadSample(type) {
 // ==========================================
 
 /**
+ * Extracts CourseIdentity (course_code, course_name_zh, course_name_en) from Word table rows.
+ * Handles parentheses, newlines, and dedicated English course title fields.
+ */
+function extractCourseIdentityFromWord(rows, course) {
+    let rawTitle = '';
+    let rawCode = '';
+    let rawEnTitle = '';
+
+    if (rows.length > 0) {
+        const row0 = rows[0];
+        if (row0.length >= 2 && row0[0].fullText.length <= 10 && row0[0].fullText.length > 0) {
+            rawCode = row0[0].fullText.trim();
+            rawTitle = row0.slice(1).map(c => c.fullText).join(' ').trim();
+        } else {
+            rawTitle = row0.map(c => c.fullText).join(' ').trim();
+        }
+    }
+
+    // Check for dedicated English course title row in table
+    for (let r = 1; r < rows.length; r++) {
+        const rText = rows[r].map(c => c.fullText).join(' ').trim();
+        const firstCell = rows[r][0] ? rows[r][0].fullText.trim() : '';
+
+        if (rText.includes('時數') || rText.includes('費用') || rText.includes('點數')) {
+            break;
+        }
+
+        if (firstCell.startsWith('英文課名') || firstCell.startsWith('英文名稱') || 
+            firstCell.startsWith('原廠課名') || firstCell.startsWith('英文') ||
+            firstCell.toLowerCase().startsWith('course name') || firstCell.toLowerCase().startsWith('english name')) {
+            const val = rows[r].slice(1).map(c => c.fullText).join(' ').trim() || rText.replace(/^[^\s：:]+[：:\s]*/, '').trim();
+            if (val) rawEnTitle = val;
+            break;
+        } else if (r === 1 && !rawEnTitle && !rText.includes('時數') && !rText.includes('費用')) {
+            rawEnTitle = rText.replace(/^[|：:\s]+/, '').trim();
+        }
+    }
+
+    // 1. Check for parentheses containing English name: (Azure Fundamentals) or （Blockchain Developer Course）
+    const parenMatch = rawTitle.match(/[(（]([A-Za-z0-9\s,&.:()/'"-]{4,})[)）]/);
+    if (parenMatch) {
+        if (!rawEnTitle) {
+            rawEnTitle = parenMatch[1].trim();
+        }
+        rawTitle = rawTitle.replace(parenMatch[0], ' ').trim();
+    }
+
+    // 2. Check for newlines in rawTitle
+    if (rawTitle.includes('\n')) {
+        const lines = rawTitle.split(/\n+/).map(l => l.trim()).filter(Boolean);
+        const zhLines = [];
+        for (const line of lines) {
+            if (/[\u4e00-\u9fa5]/.test(line)) {
+                zhLines.push(line);
+            } else if (!rawEnTitle && /^[A-Za-z0-9\s,&.:()/'"-]{3,}$/.test(line)) {
+                rawEnTitle = line;
+            }
+        }
+        if (zhLines.length > 0) rawTitle = zhLines.join(' ');
+    }
+
+    // 3. Extract course code from rawTitle if not already found
+    if (!rawCode) {
+        const codeBracketMatch = rawTitle.match(/^[\[【]([A-Za-z0-9_-]{2,10})[\]】]/);
+        if (codeBracketMatch) {
+            rawCode = codeBracketMatch[1];
+            rawTitle = rawTitle.replace(codeBracketMatch[0], '').trim();
+        } else {
+            const codePrefixMatch = rawTitle.match(/^([A-Za-z0-9_-]{2,10})[：:\s]+(.*)$/);
+            if (codePrefixMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course'].includes(codePrefixMatch[1])) {
+                rawCode = codePrefixMatch[1];
+                rawTitle = codePrefixMatch[2].trim();
+            }
+        }
+    } else {
+        rawTitle = rawTitle.replace(new RegExp(`^${rawCode}[：:\\s]*`), '').trim();
+    }
+
+    course.course_code = rawCode.trim();
+    course.course_name_zh = rawTitle.replace(/^[：:\s|]+/, '').replace(/\s+/g, ' ').trim();
+    course.course_name_en = rawEnTitle.replace(/^[：:\s|]+/, '').replace(/\s+/g, ' ').trim();
+
+    // Synchronize aliases
+    course['課程代碼'] = course.course_code;
+    course['課程名稱'] = course.course_name_zh;
+    course['中文課名'] = course.course_name_zh;
+    course['英文名稱'] = course.course_name_en;
+    course['英文課名'] = course.course_name_en;
+}
+
+/**
+ * Extracts CourseIdentity (course_code, course_name_zh, course_name_en) from PDF header items.
+ * Strictly recognizes English subtitles positioned below Chinese titles, ensuring no omission.
+ */
+function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
+    const maxHeaderY = Math.min(courseTop, metaY + 50);
+    const validItems = headerItems.filter(it => it.y > metaY + 5 && it.y <= maxHeaderY);
+
+    let code = '';
+    const zhLines = [];
+    const enLines = [];
+
+    validItems.sort((a, b) => b.y - a.y || a.x - b.x);
+    const lines = [];
+    let curY = null;
+    let curLine = [];
+    for (const it of validItems) {
+        if (curY === null || Math.abs(curY - it.y) > 4) {
+            if (curLine.length) lines.push(curLine);
+            curY = it.y;
+            curLine = [it];
+        } else {
+            curLine.push(it);
+        }
+    }
+    if (curLine.length) lines.push(curLine);
+
+    for (const line of lines) {
+        // 1. Identify left-side course code badge (x < 95)
+        const leftBadge = line.find(it => it.x < 95 && /^[A-Za-z0-9_-]{2,10}$/.test(it.str));
+        if (leftBadge && !code) {
+            code = leftBadge.str;
+        }
+
+        const contentItems = line.filter(it => it !== leftBadge);
+        if (contentItems.length === 0) continue;
+
+        const lineText = contentItems.map(it => it.str).join(' ').trim();
+        if (lineText.includes('課程簡介') || lineText.includes('各地開課時間') || lineText.match(/^\|\s*.*\s*\|$/) || lineText === '區塊鏈' || lineText === '鑒真數位') {
+            continue;
+        }
+
+        const standaloneCodeMatch = lineText.match(/^[A-Za-z0-9_-]{2,10}$/);
+        if (!code && standaloneCodeMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course'].includes(standaloneCodeMatch[0])) {
+            code = standaloneCodeMatch[0];
+            continue;
+        }
+
+        if (/[\u4e00-\u9fa5]/.test(lineText)) {
+            zhLines.push(lineText);
+        } else if (/^[A-Za-z0-9\s,&.:()/'"+\u00a0–—-]{3,}$/.test(lineText)) {
+            enLines.push(lineText);
+        }
+    }
+
+    let zhTitle = zhLines.join(' ').replace(/\s+/g, ' ').trim();
+    if (code) {
+        zhTitle = zhTitle.replace(new RegExp(`^${code}[：:\\s]*`), '').trim();
+    } else {
+        const prefixMatch = zhTitle.match(/^([A-Za-z0-9_-]{2,10})[：:\s]+(.*)$/);
+        if (prefixMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course'].includes(prefixMatch[1])) {
+            code = prefixMatch[1];
+            zhTitle = prefixMatch[2].trim();
+        }
+    }
+
+    let enTitle = enLines.join(' ').replace(/\s+/g, ' ').trim();
+    if (code) {
+        enTitle = enTitle.replace(new RegExp(`^${code}[：:\\s]*`), '').trim();
+    }
+
+    if (!enTitle) {
+        const parenMatch = zhTitle.match(/[(（]([A-Za-z0-9\s,&.:()/'"-]{4,})[)）]/);
+        if (parenMatch) {
+            enTitle = parenMatch[1].trim();
+            zhTitle = zhTitle.replace(parenMatch[0], ' ').trim();
+        }
+    }
+
+    return {
+        course_code: code,
+        course_name_zh: zhTitle,
+        course_name_en: enTitle
+    };
+}
+
+/**
  * Parses Word (.docx) file extracting clean table data without deleted (strikethrough) items.
  */
 async function parseDocx(buffer) {
@@ -306,11 +483,19 @@ async function parseDocx(buffer) {
             continue;
         }
 
-        // Exact schema mapping
+        // Exact schema mapping with CourseIdentity
         const course = {
+            course_code: '',     // 課程代碼/認證代號 (如 CCNA, AZ-900)
+            course_name_zh: '',  // 中文課名
+            course_name_en: '',  // 英文課名（原廠課名/官方名稱）
+
+            // Aliases for backwards compatibility and strict field labeling
             '課程代碼': '',
             '課程名稱': '',
+            '中文課名': '',
             '英文名稱': '',
+            '英文課名': '',
+
             '時數': '',
             '費用': '',
             '點數': '',
@@ -326,28 +511,13 @@ async function parseDocx(buffer) {
             source: 'Word'
         };
 
+        // Extract CourseIdentity (course_code, course_name_zh, course_name_en)
+        extractCourseIdentityFromWord(rows, course);
+
         for (let i = 0; i < rows.length; i++) {
             const row = rows[i];
             const rowFullText = row.map(c => c.fullText).join(' ').replace(/\s+/g, ' ').trim();
             const firstCellText = row[0] ? row[0].fullText : '';
-
-            if (i === 0) {
-                // Course Code & Chinese Name
-                if (row.length >= 2 && row[0].fullText.length <= 10 && row[0].fullText.length > 0) {
-                    course['課程代碼'] = row[0].fullText.trim();
-                    course['課程名稱'] = row.slice(1).map(c => c.fullText).join(' ').replace(/^[：:\s|]+/, '').trim();
-                } else {
-                    const parts = rowFullText.split(/[\s|：:]+/);
-                    if (parts.length >= 2 && parts[0].length <= 10) {
-                        course['課程代碼'] = parts[0].trim();
-                        course['課程名稱'] = rowFullText.replace(parts[0], '').replace(/^[|：:\s]+/, '').trim();
-                    } else {
-                        course['課程名稱'] = rowFullText;
-                    }
-                }
-            } else if (i === 1 && !rowFullText.includes('時數') && !rowFullText.includes('費用')) {
-                course['英文名稱'] = rowFullText.replace(/^[|：:\s]+/, '').trim();
-            }
 
             // Metadata row
             if (rowFullText.includes('時數') || rowFullText.includes('費用') || rowFullText.includes('點數')) {
@@ -397,17 +567,8 @@ async function parseDocx(buffer) {
             }
         }
 
-        // Clean code if prefixed to name
-        if (!course['課程代碼'] && course['課程名稱']) {
-            const m = course['課程名稱'].match(/^([A-Za-z0-9_-]{2,10})\s+(.*)$/);
-            if (m) {
-                course['課程代碼'] = m[1];
-                course['課程名稱'] = m[2];
-            }
-        }
-
-        // If course code is empty and all fields empty (e.g. fully struck out course), skip
-        if (course['課程名稱'] || course['課程代碼']) {
+        // If course identity exists, push to list
+        if (course.course_name_zh || course.course_code || course.course_name_en) {
             courses.push(course);
         }
     }
@@ -521,9 +682,17 @@ async function parsePdf(buffer) {
             }
 
             const course = {
+                course_code: '',     // 課程代碼/認證代號 (如 CCNA, AZ-900)
+                course_name_zh: '',  // 中文課名
+                course_name_en: '',  // 英文課名（原廠課名/官方名稱）
+
+                // Aliases for backwards compatibility and strict field labeling
                 '課程代碼': '',
                 '課程名稱': '',
+                '中文課名': '',
                 '英文名稱': '',
+                '英文課名': '',
+
                 '時數': '',
                 '費用': '',
                 '點數': '',
@@ -557,47 +726,20 @@ async function parsePdf(buffer) {
             const matMatch = metaLineText.match(/教材[：:\s]*([^｜|\n]+)/);
             if (matMatch) course['教材'] = matMatch[1].trim();
 
-            // Header lines (above metaY + 5 and below courseTop)
+            // Extract CourseIdentity from PDF header items (嚴格擷取英文原廠副標題與代碼，嚴禁忽略英文副標)
             const headerItems = items.filter(it => it.y > metaY + 5 && it.y <= courseTop);
-            headerItems.sort((a, b) => b.y - a.y || a.x - b.x);
+            const identity = extractCourseIdentityFromPdf(headerItems, metaY, courseTop);
 
-            const headerLines = [];
-            let curY = null;
-            let curLine = [];
-            for (const it of headerItems) {
-                if (curY === null || Math.abs(curY - it.y) > 4) {
-                    if (curLine.length) headerLines.push(curLine.join(' '));
-                    curY = it.y;
-                    curLine = [it.str];
-                } else {
-                    curLine.push(it.str);
-                }
-            }
-            if (curLine.length) headerLines.push(curLine.join(' '));
+            course.course_code = identity.course_code;
+            course.course_name_zh = identity.course_name_zh;
+            course.course_name_en = identity.course_name_en;
 
-            for (const hLine of headerLines) {
-                const clean = hLine.trim();
-                if (clean.includes('課程簡介') || clean.includes('各地開課時間') || clean.match(/^\|\s*.*\s*\|$/)) continue;
-
-                const codeMatch = clean.match(/\b([A-Za-z0-9_-]{2,10})\b/);
-                if (codeMatch && !course['課程代碼'] && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course'].includes(codeMatch[1])) {
-                    course['課程代碼'] = codeMatch[1];
-                }
-
-                if (/^[A-Za-z0-9\s,&.:()'-]+$/.test(clean) && clean.length > 5) {
-                    course['英文名稱'] = clean.replace(course['課程代碼'], '').trim();
-                } else if (/[\u4e00-\u9fa5]/.test(clean)) {
-                    if (!course['課程名稱']) {
-                        course['課程名稱'] = clean.replace(course['課程代碼'], '').trim();
-                    } else {
-                        course['課程名稱'] += ' ' + clean.replace(course['課程代碼'], '').trim();
-                    }
-                }
-            }
-
-            if (course['課程名稱'] && course['課程代碼']) {
-                course['課程名稱'] = course['課程名稱'].replace(new RegExp(`^${course['課程代碼']}[：:\\s]*`), '').trim();
-            }
+            // Synchronize aliases
+            course['課程代碼'] = course.course_code;
+            course['課程名稱'] = course.course_name_zh;
+            course['中文課名'] = course.course_name_zh;
+            course['英文名稱'] = course.course_name_en;
+            course['英文課名'] = course.course_name_en;
 
             // Extract each section strictly isolated inside its vertical box [bottom, top]
             for (const sec of courseSections) {
@@ -720,46 +862,93 @@ function compareCourseData(wordCourses, pdfCourses) {
     const matchedPdfIndices = new Set();
 
     for (const wCourse of wordCourses) {
-        let matchedPdf = null;
-        let matchedIdx = -1;
+        let bestPdf = null;
+        let bestIdx = -1;
+        let bestScore = 0;
 
-        // 1. Match by Course Code
-        if (wCourse['課程代碼']) {
-            const idx = pdfCourses.findIndex((p, i) => !matchedPdfIndices.has(i) && p['課程代碼'] && p['課程代碼'].toLowerCase() === wCourse['課程代碼'].toLowerCase());
-            if (idx !== -1) {
-                matchedPdf = pdfCourses[idx];
-                matchedIdx = idx;
+        const wCode = (wCourse.course_code || wCourse['課程代碼'] || '').trim().toLowerCase();
+        const wZh = normalizeText(wCourse.course_name_zh || wCourse['課程名稱'] || '');
+        const wEn = normalizeText(wCourse.course_name_en || wCourse['英文名稱'] || '');
+
+        for (let i = 0; i < pdfCourses.length; i++) {
+            if (matchedPdfIndices.has(i)) continue;
+            const p = pdfCourses[i];
+
+            const pCode = (p.course_code || p['課程代碼'] || '').trim().toLowerCase();
+            const pZh = normalizeText(p.course_name_zh || p['課程名稱'] || '');
+            const pEn = normalizeText(p.course_name_en || p['英文名稱'] || '');
+
+            // Anchor 1: 課程代碼完全一致 (如 CCNA, AZ-104, BCIC, iFCI)
+            const codeMatch = wCode && pCode && (wCode === pCode);
+
+            // Anchor 2: 英文課名完全相符或相似度 > 85% (忽略大小寫與前後符號)
+            let enSim = 0;
+            let enMatch = false;
+            if (wEn && pEn) {
+                if (wEn === pEn) {
+                    enMatch = true;
+                    enSim = 1.0;
+                } else {
+                    enSim = calculateSimilarity(wEn, pEn);
+                    if (enSim > 0.85 || wEn.includes(pEn) || pEn.includes(wEn)) {
+                        enMatch = true;
+                    }
+                }
             }
-        }
 
-        // 2. Fallback Match by Course Title similarity
-        if (!matchedPdf && wCourse['課程名稱']) {
-            const wClean = normalizeText(wCourse['課程名稱']);
-            for (let i = 0; i < pdfCourses.length; i++) {
-                if (matchedPdfIndices.has(i)) continue;
-                const pClean = normalizeText(pdfCourses[i]['課程名稱']);
-                if (wClean.includes(pClean) || pClean.includes(wClean) || calculateSimilarity(wClean, pClean) > 0.6) {
-                    matchedPdf = pdfCourses[i];
-                    matchedIdx = i;
-                    break;
+            // Anchor 3: 中文名稱相似度 > 80%
+            let zhSim = 0;
+            let zhMatch = false;
+            if (wZh && pZh) {
+                if (wZh === pZh) {
+                    zhMatch = true;
+                    zhSim = 1.0;
+                } else {
+                    zhSim = calculateSimilarity(wZh, pZh);
+                    if (zhSim > 0.80 || wZh.includes(pZh) || pZh.includes(wZh)) {
+                        zhMatch = true;
+                    }
+                }
+            }
+
+            if (codeMatch || enMatch || zhMatch) {
+                let score = 0;
+                if (codeMatch) score += 100;
+                if (enMatch) score += 90 + enSim * 5;
+                if (zhMatch) score += 80 + zhSim * 5;
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestPdf = p;
+                    bestIdx = i;
                 }
             }
         }
 
-        if (matchedPdf) {
-            matchedPdfIndices.add(matchedIdx);
-            results.push(compareSinglePair(wCourse, matchedPdf));
+        if (bestPdf) {
+            matchedPdfIndices.add(bestIdx);
+            results.push(compareSinglePair(wCourse, bestPdf));
         } else {
             // Missing in PDF
+            const wNameZh = wCourse.course_name_zh || wCourse['課程名稱'] || '';
+            const wNameEn = wCourse.course_name_en || wCourse['英文名稱'] || '';
+            const wCodeVal = wCourse.course_code || wCourse['課程代碼'] || '未標註';
+
             results.push({
                 status: 'gray',
                 statusText: 'PDF 排版漏排此課程',
-                code: wCourse['課程代碼'] || '未標註',
-                name: wCourse['課程名稱'],
+                code: wCodeVal,
+                name: wNameZh || wNameEn,
+                nameZh: wNameZh,
+                nameEn: wNameEn,
                 wordCourse: wCourse,
                 pdfCourse: null,
                 fields: {
-                    '課程名稱': { status: 'gray', label: '課程名稱', word: wCourse['課程名稱'], pdf: '(未找到)', desc: 'PDF 缺少此課程' },
+                    '中文課名': { status: 'gray', label: '中文課名', word: wNameZh || '-', pdf: '(未找到)', desc: 'PDF 缺少此課程' },
+                    '英文課名': { status: 'gray', label: '英文課名', word: wNameEn || '-', pdf: '(未找到)', desc: 'PDF 缺少此課程' },
+                    '課程名稱': { status: 'gray', label: '中文課名', word: wNameZh || '-', pdf: '(未找到)', desc: 'PDF 缺少此課程' },
+                    '英文名稱': { status: 'gray', label: '英文課名', word: wNameEn || '-', pdf: '(未找到)', desc: 'PDF 缺少此課程' },
+                    '課程代碼': { status: 'gray', label: '課程代碼', word: wCodeVal, pdf: '-', desc: '缺少' },
                     '時數': { status: 'gray', label: '時數', word: `${wCourse['時數']} 小時`, pdf: '-', desc: '缺少' },
                     '點數': { status: 'gray', label: '點數', word: `${wCourse['點數']} 點`, pdf: '-', desc: '缺少' },
                     '費用': { status: 'gray', label: '費用', word: `${Number(wCourse['費用'] || 0).toLocaleString()} 元`, pdf: '-', desc: '缺少' },
@@ -776,15 +965,25 @@ function compareCourseData(wordCourses, pdfCourses) {
     for (let i = 0; i < pdfCourses.length; i++) {
         if (!matchedPdfIndices.has(i)) {
             const pCourse = pdfCourses[i];
+            const pNameZh = pCourse.course_name_zh || pCourse['課程名稱'] || '';
+            const pNameEn = pCourse.course_name_en || pCourse['英文名稱'] || '';
+            const pCodeVal = pCourse.course_code || pCourse['課程代碼'] || '未標註';
+
             results.push({
                 status: 'gray',
                 statusText: 'Word 原稿無此課程 (PDF 多出)',
-                code: pCourse['課程代碼'] || '未標註',
-                name: pCourse['課程名稱'],
+                code: pCodeVal,
+                name: pNameZh || pNameEn,
+                nameZh: pNameZh,
+                nameEn: pNameEn,
                 wordCourse: null,
                 pdfCourse: pCourse,
                 fields: {
-                    '課程名稱': { status: 'gray', label: '課程名稱', word: '(未找到)', pdf: pCourse['課程名稱'], desc: 'Word 原稿未列出此課' },
+                    '中文課名': { status: 'gray', label: '中文課名', word: '(未找到)', pdf: pNameZh || '-', desc: 'Word 原稿未列出此課' },
+                    '英文課名': { status: 'gray', label: '英文課名', word: '(未找到)', pdf: pNameEn || '-', desc: 'Word 原稿未列出此課' },
+                    '課程名稱': { status: 'gray', label: '中文課名', word: '(未找到)', pdf: pNameZh || '-', desc: 'Word 原稿未列出此課' },
+                    '英文名稱': { status: 'gray', label: '英文課名', word: '(未找到)', pdf: pNameEn || '-', desc: 'Word 原稿未列出此課' },
+                    '課程代碼': { status: 'gray', label: '課程代碼', word: '-', pdf: pCodeVal, desc: '原稿無' },
                     '時數': { status: 'gray', label: '時數', word: '-', pdf: `${pCourse['時數']} 小時`, desc: '原稿無' },
                     '點數': { status: 'gray', label: '點數', word: '-', pdf: `${pCourse['點數']} 點`, desc: '原稿無' },
                     '費用': { status: 'gray', label: '費用', word: '-', pdf: `${Number(pCourse['費用'] || 0).toLocaleString()} 元`, desc: '原稿無' },
@@ -806,28 +1005,71 @@ function compareSinglePair(w, p) {
     let hasYellow = false;
 
     // 1. 課程代碼
-    const codeMatch = (w['課程代碼'] || '').trim().toLowerCase() === (p['課程代碼'] || '').trim().toLowerCase();
+    const wCode = (w.course_code || w['課程代碼'] || '').trim();
+    const pCode = (p.course_code || p['課程代碼'] || '').trim();
+    const codeMatch = wCode && pCode && (wCode.toLowerCase() === pCode.toLowerCase());
     fields['課程代碼'] = {
         label: '課程代碼',
-        word: w['課程代碼'] || '-',
-        pdf: p['課程代碼'] || '-',
-        status: codeMatch ? 'green' : 'red',
-        desc: codeMatch ? '代碼正確' : '課程代碼不相符！'
+        word: wCode || '-',
+        pdf: pCode || '-',
+        status: codeMatch ? 'green' : (wCode && pCode ? 'red' : 'yellow'),
+        desc: codeMatch ? '代碼相符' : (wCode && pCode ? '課程代碼不相符！' : '代碼未標註')
     };
-    if (!codeMatch) hasRed = true;
+    if (wCode && pCode && !codeMatch) hasRed = true;
 
-    // 2. 課程名稱 (中文名稱)
-    const wNameNorm = normalizeText(w['課程名稱']);
-    const pNameNorm = normalizeText(p['課程名稱']);
-    if (wNameNorm === pNameNorm) {
-        fields['課程名稱'] = { label: '課程名稱', word: w['課程名稱'], pdf: p['課程名稱'], status: 'green', desc: '名稱完全相符' };
-    } else if (calculateSimilarity(wNameNorm, pNameNorm) > 0.8) {
-        fields['課程名稱'] = { label: '課程名稱', word: w['課程名稱'], pdf: p['課程名稱'], status: 'yellow', desc: '微小文字或空白差異' };
+    // 2. 中文課名
+    const wNameZh = (w.course_name_zh || w['課程名稱'] || '').trim();
+    const pNameZh = (p.course_name_zh || p['課程名稱'] || '').trim();
+    const wZhNorm = normalizeText(wNameZh);
+    const pZhNorm = normalizeText(pNameZh);
+
+    if (!wZhNorm && !pZhNorm) {
+        fields['中文課名'] = { label: '中文課名', word: '(無)', pdf: '(無)', status: 'green', desc: '雙方皆無中文課名' };
+    } else if (wZhNorm === pZhNorm) {
+        fields['中文課名'] = { label: '中文課名', word: wNameZh, pdf: pNameZh, status: 'green', desc: '中文課名完全相符' };
+    } else if (calculateSimilarity(wZhNorm, pZhNorm) > 0.85 || wZhNorm.includes(pZhNorm) || pZhNorm.includes(wZhNorm)) {
+        fields['中文課名'] = { label: '中文課名', word: wNameZh, pdf: pNameZh, status: 'yellow', desc: '中文課名文字微差' };
         hasYellow = true;
     } else {
-        fields['課程名稱'] = { label: '課程名稱', word: w['課程名稱'], pdf: p['課程名稱'], status: 'red', desc: '名稱明顯不同或有錯字！' };
+        fields['中文課名'] = { label: '中文課名', word: wNameZh || '(無)', pdf: pNameZh || '(漏排)', status: 'red', desc: '中文課名不一致或錯字！' };
         hasRed = true;
     }
+    // Backward compatibility for 課程名稱
+    fields['課程名稱'] = fields['中文課名'];
+
+    // 3. 英文課名 (原廠課名/官方名稱)
+    const wNameEn = (w.course_name_en || w['英文名稱'] || '').trim();
+    const pNameEn = (p.course_name_en || p['英文名稱'] || '').trim();
+    const wEnNorm = normalizeText(wNameEn);
+    const pEnNorm = normalizeText(pNameEn);
+
+    if (!wEnNorm && !pEnNorm) {
+        fields['英文課名'] = { label: '英文課名', word: '(無)', pdf: '(無)', status: 'green', desc: '雙方皆無英文課名' };
+    } else if (wEnNorm && !pEnNorm) {
+        fields['英文課名'] = { label: '英文課名', word: wNameEn, pdf: '(PDF 漏排英文副標)', status: 'red', desc: 'PDF 漏排英文課名副標！' };
+        hasRed = true;
+    } else if (!wEnNorm && pEnNorm) {
+        fields['英文課名'] = { label: '英文課名', word: '(無)', pdf: pNameEn, status: 'yellow', desc: 'Word 原稿無英文課名，但 PDF 有排版' };
+        hasYellow = true;
+    } else {
+        if (wEnNorm === pEnNorm) {
+            fields['英文課名'] = { label: '英文課名', word: wNameEn, pdf: pNameEn, status: 'green', desc: '英文課名完全相符' };
+        } else if (calculateSimilarity(wEnNorm, pEnNorm) > 0.85 || wEnNorm.includes(pEnNorm) || pEnNorm.includes(wEnNorm)) {
+            fields['英文課名'] = { label: '英文課名', word: wNameEn, pdf: pNameEn, status: 'yellow', desc: '英文課名微差 (單字大小寫或標點差異)' };
+            hasYellow = true;
+        } else {
+            fields['英文課名'] = {
+                label: '英文課名',
+                word: wNameEn,
+                pdf: pNameEn,
+                status: 'red',
+                desc: `英文課名不一致！Word 為「${wNameEn}」，但 PDF 為「${pNameEn}」`
+            };
+            hasRed = true;
+        }
+    }
+    // Backward compatibility for 英文名稱
+    fields['英文名稱'] = fields['英文課名'];
 
     // 3. 時數 (Rule 4: Mismatch is RED)
     const wHours = parseFloat(w['時數']) || 0;
@@ -1094,11 +1336,17 @@ function compareSinglePair(w, p) {
         overallText = '部分欄位有格式或文字微差提醒';
     }
 
+    const finalNameZh = w.course_name_zh || p.course_name_zh || w['課程名稱'] || p['課程名稱'] || '';
+    const finalNameEn = w.course_name_en || p.course_name_en || w['英文名稱'] || p['英文名稱'] || '';
+    const finalCode = w.course_code || p.course_code || w['課程代碼'] || p['課程代碼'] || '未標註';
+
     return {
         status: overallStatus,
         statusText: overallText,
-        code: w['課程代碼'] || p['課程代碼'] || '未標註',
-        name: w['課程名稱'] || p['課程名稱'],
+        code: finalCode,
+        name: finalNameZh || finalNameEn,
+        nameZh: finalNameZh,
+        nameEn: finalNameEn,
         wordCourse: w,
         pdfCourse: p,
         fields
@@ -1234,9 +1482,11 @@ function createCourseCard(item, idx) {
 
     // Render all fields in exact order
     const fieldsOrder = [
+        '中文課名',
+        '英文課名',
+        '課程代碼',
         '時數',
         '點數',
-        '課程名稱',
         '費用',
         '教材',
         '課程內容',
@@ -1341,23 +1591,84 @@ function createCourseCard(item, idx) {
         `;
     }
 
+    // Prepare badges for 中文課名 and 英文課名
+    const zhField = item.fields['中文課名'] || item.fields['課程名稱'] || { status: 'gray', desc: '-' };
+    const enField = item.fields['英文課名'] || item.fields['英文名稱'] || { status: 'gray', desc: '-' };
+
+    let zhBadgeClass = 'badge-gray';
+    let zhDotClass = 'gray';
+    let zhBadgeText = '中文課名未比對';
+    if (zhField.status === 'green') {
+        zhBadgeClass = 'badge-green';
+        zhDotClass = 'green';
+        zhBadgeText = '中文課名相符';
+    } else if (zhField.status === 'yellow') {
+        zhBadgeClass = 'badge-yellow';
+        zhDotClass = 'yellow';
+        zhBadgeText = '中文課名微差';
+    } else if (zhField.status === 'red') {
+        zhBadgeClass = 'badge-red';
+        zhDotClass = 'red';
+        zhBadgeText = '中文課名不一致';
+    } else {
+        zhBadgeText = zhField.desc || '中文課名缺少';
+    }
+
+    let enBadgeClass = 'badge-gray';
+    let enDotClass = 'gray';
+    let enBadgeText = '英文課名未比對';
+    if (enField.status === 'green') {
+        enBadgeClass = 'badge-green';
+        enDotClass = 'green';
+        enBadgeText = '英文課名相符';
+    } else if (enField.status === 'yellow') {
+        enBadgeClass = 'badge-yellow';
+        enDotClass = 'yellow';
+        enBadgeText = '英文課名微差';
+    } else if (enField.status === 'red') {
+        enBadgeClass = 'badge-red';
+        enDotClass = 'red';
+        enBadgeText = (enField.desc && enField.desc.includes('漏排')) ? 'PDF 漏排英文課名' : '英文課名不一致';
+    } else {
+        enBadgeText = enField.desc || '英文課名缺少';
+    }
+
+    const zhNameDisplay = item.nameZh || item.name || '(未提供中文課名)';
+    const enNameDisplay = item.nameEn || (item.pdfCourse && item.pdfCourse.course_name_en) || (item.wordCourse && item.wordCourse.course_name_en) || '(無英文課名/未排)';
+
     card.innerHTML = `
-        <div class="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100">
-            <div class="flex items-center space-x-3">
-                <span class="px-2.5 py-1 rounded-lg text-xs font-bold font-mono tracking-wide ${
+        <div class="p-5 flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-slate-100 bg-slate-50/40">
+            <div class="flex items-start space-x-3.5 flex-1 min-w-0">
+                <span class="mt-0.5 px-2.5 py-1.5 rounded-lg text-xs font-bold font-mono tracking-wide flex-shrink-0 ${
                     item.status === 'red' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'
                 }">
                     ${item.code}
                 </span>
-                <div>
-                    <h3 class="text-base font-bold text-slate-900">${item.name}</h3>
-                    <p class="text-xs text-slate-400">${item.wordCourse && item.wordCourse['英文名稱'] ? item.wordCourse['英文名稱'] : (item.pdfCourse && item.pdfCourse['英文名稱'] ? item.pdfCourse['英文名稱'] : '')}</p>
+                <div class="space-y-2 flex-1 min-w-0">
+                    <!-- 中文課名與標籤 -->
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="text-2xs font-semibold px-2 py-0.5 bg-slate-200 text-slate-700 rounded">中文課名</span>
+                        <h3 class="text-base font-bold text-slate-900 break-words">${zhNameDisplay}</h3>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold ${zhBadgeClass}">
+                            <span class="light-dot ${zhDotClass} mr-1"></span>
+                            ${zhBadgeText}
+                        </span>
+                    </div>
+                    <!-- 英文課名與標籤 -->
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="text-2xs font-semibold px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded">英文課名</span>
+                        <p class="text-xs font-medium text-slate-600 font-mono break-words">${enNameDisplay}</p>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold ${enBadgeClass}">
+                            <span class="light-dot ${enDotClass} mr-1"></span>
+                            ${enBadgeText}
+                        </span>
+                    </div>
                 </div>
             </div>
 
-            <div class="flex items-center space-x-3">
+            <div class="flex items-center space-x-3 flex-shrink-0 self-start md:self-auto">
                 ${pdfPage ? `<span class="text-xs text-slate-400 font-medium">${pdfPage}</span>` : ''}
-                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${statusBadgeClass}">
+                <span class="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold ${statusBadgeClass}">
                     ${statusIcon}
                     ${item.statusText}
                 </span>
@@ -1388,7 +1699,7 @@ function createCourseCard(item, idx) {
 
 function formatFieldValue(field, val, isError) {
     if (!val) return '<span class="text-slate-300">-</span>';
-    if (isError && (field === '時數' || field === '點數' || field === '費用')) {
+    if (isError && (field === '時數' || field === '點數' || field === '費用' || field === '中文課名' || field === '英文課名' || field === '課程名稱' || field === '英文名稱')) {
         return `<span class="diff-val-error">${val}</span>`;
     }
     return val;
@@ -1427,6 +1738,8 @@ function copyErrorReport() {
             for (const key of Object.keys(item.fields)) {
                 const f = item.fields[key];
                 if (f.status === 'red') {
+                    if (key === '課程名稱' && item.fields['中文課名']) continue;
+                    if (key === '英文名稱' && item.fields['英文課名']) continue;
                     report += `   - ${f.label}：Word 原稿寫「${f.word}」，但 PDF 排版為「${f.pdf}」 ➔ ${f.desc}\n`;
                 }
             }
@@ -1466,7 +1779,12 @@ function exportCSVReport() {
 
     const headers = [
         '課程代碼',
-        '課程名稱',
+        'Word中文課名',
+        'PDF中文課名',
+        '中文課名比對',
+        'Word英文課名',
+        'PDF英文課名',
+        '英文課名比對',
         '比對狀態',
         'Word時數',
         'PDF時數',
@@ -1489,12 +1807,24 @@ function exportCSVReport() {
         const fields = c.fields;
         const errDescs = [];
         for (const k of Object.keys(fields)) {
-            if (fields[k].status === 'red') errDescs.push(`${fields[k].label}:${fields[k].desc}`);
+            if (fields[k].status === 'red') {
+                if (k === '課程名稱' && fields['中文課名']) continue;
+                if (k === '英文名稱' && fields['英文課名']) continue;
+                errDescs.push(`${fields[k].label}:${fields[k].desc}`);
+            }
         }
+
+        const zhF = fields['中文課名'] || fields['課程名稱'] || {};
+        const enF = fields['英文課名'] || fields['英文名稱'] || {};
 
         rows.push([
             c.code,
-            `"${(c.name || '').replace(/"/g, '""')}"`,
+            `"${(zhF.word || '').replace(/"/g, '""')}"`,
+            `"${(zhF.pdf || '').replace(/"/g, '""')}"`,
+            zhF.desc || '',
+            `"${(enF.word || '').replace(/"/g, '""')}"`,
+            `"${(enF.pdf || '').replace(/"/g, '""')}"`,
+            enF.desc || '',
             c.status === 'green' ? '相符' : c.status === 'red' ? '錯誤' : c.status === 'yellow' ? '提醒' : '遺漏',
             fields['時數'] ? fields['時數'].word : '',
             fields['時數'] ? fields['時數'].pdf : '',
