@@ -379,6 +379,9 @@ async function parseDocx(buffer) {
                             pItems = splitOutlineItems(fullContent);
                         }
                         course['課程內容'] = pItems;
+                    } else if (label === '後續推薦課程') {
+                        const allParas = row.slice(1).flatMap(c => c.paragraphs).filter(p => p.trim().length > 0);
+                        course['後續推薦課程'] = allParas.length > 0 ? allParas.join('\n').trim() : row.slice(1).map(c => c.fullText).join(' ').trim();
                     } else {
                         const val = row.slice(1).map(c => c.fullText).join(' ').trim();
                         course[label] = val;
@@ -655,6 +658,30 @@ function splitOutlineItems(text) {
     return items.length > 0 ? items : [text.trim()];
 }
 
+function splitRecommendedCourses(text) {
+    if (!text) return [];
+    const trimmed = text.trim();
+    if (!trimmed) return [];
+
+    // 1. If contains newlines
+    if (trimmed.includes('\n')) {
+        return trimmed.split(/\n+/).map(s => s.trim()).filter(Boolean);
+    }
+
+    // 2. If contains course codes with colon (e.g. BCIC：... BCFS：...)
+    const matches = trimmed.match(/[A-Za-z0-9_-]{2,10}[：:][\s\S]*?(?=(?:[A-Za-z0-9_-]{2,10}[：:]|$))/g);
+    if (matches && matches.length > 0) {
+        return matches.map(s => s.trim()).filter(Boolean);
+    }
+
+    // 3. If separated by semicolon
+    if (trimmed.includes('；') || trimmed.includes(';')) {
+        return trimmed.split(/[；;]+/).map(s => s.trim()).filter(Boolean);
+    }
+
+    return [trimmed];
+}
+
 // ==========================================
 // Comparison & Traffic Light Engine
 // ==========================================
@@ -895,19 +922,72 @@ function compareSinglePair(w, p) {
         hasRed = true;
     }
 
-    // 9. 後續推薦課程 (Rule 2 & 4: 獨立欄位隔離，不混入課程內容)
-    const wRec = normalizeText(w['後續推薦課程'] || '');
-    const pRec = normalizeText(p['後續推薦課程'] || '');
-    if (!wRec && !pRec) {
-        fields['後續推薦課程'] = { label: '後續推薦課程', word: '(無)', pdf: '(無)', status: 'green', desc: '雙方皆無推薦' };
-    } else if (wRec === pRec) {
-        fields['後續推薦課程'] = { label: '後續推薦課程', word: w['後續推薦課程'], pdf: p['後續推薦課程'], status: 'green', desc: '推薦課程相符' };
-    } else if (calculateSimilarity(wRec, pRec) > 0.7) {
-        fields['後續推薦課程'] = { label: '後續推薦課程', word: w['後續推薦課程'], pdf: p['後續推薦課程'], status: 'yellow', desc: '推薦課程文字微差' };
+    // 9. 後續推薦課程 (業務規則：PDF 只會抓取 Word 的第一個推薦課程，若有第2、第3個推薦課程未排上 PDF 視為正常)
+    const wRecRaw = (w['後續推薦課程'] || '').trim();
+    const pRecRaw = (p['後續推薦課程'] || '').trim();
+    const wRecList = splitRecommendedCourses(wRecRaw);
+    const wFirstRec = wRecList.length > 0 ? wRecList[0] : '';
+
+    const wFirstNorm = normalizeText(wFirstRec);
+    const wAllNorm = normalizeText(wRecRaw);
+    const pRecNorm = normalizeText(pRecRaw);
+
+    if (!wRecRaw && !pRecRaw) {
+        fields['後續推薦課程'] = { label: '後續推薦課程', word: '(無)', pdf: '(無)', status: 'green', desc: '雙方皆無推薦課程' };
+    } else if (wRecRaw && !pRecRaw) {
+        fields['後續推薦課程'] = {
+            label: '後續推薦課程',
+            word: wFirstRec + (wRecList.length > 1 ? ` (Word 另有 ${wRecList.length - 1} 門)` : ''),
+            pdf: '(未排/漏排)',
+            status: 'red',
+            desc: 'PDF 漏排首門推薦課程！'
+        };
+        hasRed = true;
+    } else if (!wRecRaw && pRecRaw) {
+        fields['後續推薦課程'] = {
+            label: '後續推薦課程',
+            word: '(無)',
+            pdf: pRecRaw,
+            status: 'yellow',
+            desc: 'Word 原稿無推薦課程，但 PDF 有排版'
+        };
         hasYellow = true;
     } else {
-        fields['後續推薦課程'] = { label: '後續推薦課程', word: w['後續推薦課程'] || '(無)', pdf: p['後續推薦課程'] || '(漏排)', status: 'red', desc: '推薦課程不一致或漏排！' };
-        hasRed = true;
+        const isMatch = (wFirstNorm === pRecNorm) || (wAllNorm === pRecNorm);
+        const simFirst = calculateSimilarity(wFirstNorm, pRecNorm);
+        const simAll = calculateSimilarity(wAllNorm, pRecNorm);
+        const maxSim = Math.max(simFirst, simAll);
+
+        if (isMatch) {
+            const extraNote = wRecList.length > 1
+                ? `首門推薦課程相符 (Word 共 ${wRecList.length} 門，美編依規則僅排首門，正常)`
+                : '推薦課程相符';
+            fields['後續推薦課程'] = {
+                label: '後續推薦課程',
+                word: wFirstRec + (wRecList.length > 1 ? ` (Word 另有 ${wRecList.length - 1} 門)` : ''),
+                pdf: pRecRaw,
+                status: 'green',
+                desc: extraNote
+            };
+        } else if (maxSim > 0.75 || wFirstNorm.includes(pRecNorm) || pRecNorm.includes(wFirstNorm)) {
+            fields['後續推薦課程'] = {
+                label: '後續推薦課程',
+                word: wFirstRec + (wRecList.length > 1 ? ` (Word 另有 ${wRecList.length - 1} 門)` : ''),
+                pdf: pRecRaw,
+                status: 'yellow',
+                desc: '推薦課程文字微差 (首門推薦課程大致相符)'
+            };
+            hasYellow = true;
+        } else {
+            fields['後續推薦課程'] = {
+                label: '後續推薦課程',
+                word: wFirstRec,
+                pdf: pRecRaw,
+                status: 'red',
+                desc: `推薦課程不符！Word 首門為「${wFirstRec}」，但 PDF 為「${pRecRaw}」`
+            };
+            hasRed = true;
+        }
     }
 
     // 10. 適合對象
@@ -1337,7 +1417,7 @@ function copyErrorReport() {
     let report = `【課程資料校稿差異報告 - 待美編修正】\n`;
     report += `比對時間：${new Date().toLocaleString('zh-TW')}\n`;
     report += `來源檔案：Word [${state.wordFile ? state.wordFile.name : 'Word'}] ⇄ PDF [${state.pdfFile ? state.pdfFile.name : 'PDF'}]\n`;
-    report += `說明：依排版規則，『課程目標』與『學會技能』若因精簡版面未排入，視為正常略過。\n`;
+    report += `說明：依排版規則，『課程目標』與『學會技能』若因精簡版面未排入，視為正常略過；『後續推薦課程』美編依規則僅排首門，其餘未排亦視為正常。\n`;
     report += `--------------------------------------------------------\n\n`;
 
     if (redItems.length > 0) {
