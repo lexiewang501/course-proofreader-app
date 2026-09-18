@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>課程資料校稿小工具 (Word vs PDF 智慧比對)</title>
+    <!-- Tailwind CSS (Local offline bundle with fallback) -->
+    <script src="lib/tailwind.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+    <!-- JSZip for Docx parsing -->
+    <script src="lib/jszip.min.js"></script>
+    <!-- PDF.js for PDF parsing -->
+    <script src="lib/pdf.min.js"></script>
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-800 antialiased selection:bg-blue-100 selection:text-blue-900">
+
+    <!-- Top Navigation Bar -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold text-slate-900 leading-tight">課程資料校稿小工具</h1>
+                    <p class="text-xs text-slate-500">Word 原稿 (.docx) ⇄ 美編排版檔 (.pdf) 自動逐欄比對系統</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-3">
+                <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5"></span>
+                    本地離線模式 (資料不外流)
+                </span>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+        <!-- Upload & Quick Sample Section -->
+        <section class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 sm:p-8 no-print">
+            <div class="mb-6">
+                <h2 class="text-base font-semibold text-slate-900 flex items-center">
+                    <svg class="w-5 h-5 mr-2 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                    </svg>
+                    步驟一：上傳或載入要比對的 Word 與 PDF 檔案
+                </h2>
+                <p class="text-sm text-slate-500 mt-1">請將排版前的 Word 原稿與美編製作的 PDF 檔案分別拖入下方區塊，或直接點擊載入測試範例體驗。</p>
+            </div>
+
+            <!-- Drag & Drop Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Word Upload Card -->
+                <div id="wordDropzone" class="dropzone rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer relative bg-slate-50/50 hover:bg-blue-50/40 border-2 border-dashed border-slate-300 transition group">
+                    <input type="file" id="wordFileInput" accept=".docx" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10">
+                    <div id="wordEmptyView" class="space-y-3 pointer-events-none">
+                        <div class="w-14 h-14 mx-auto rounded-full bg-blue-100 flex items-center justify-center text-blue-600 group-hover:scale-105 transition transform">
+                            <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <p class="text-sm font-semibold text-slate-700">點選或拖曳上傳 Word 檔</p>
+                            <p class="text-xs text-slate-400 mt-1">支援格式：.docx (排版前原始資料)</p>
+                        </div>
+                        <span class="inline-block px-3 py-1 bg-white border border-slate-200 rounded-lg text-xs text-blue-600 font-medium shadow-2xs">選擇 Word 檔案</span>
+                    </div>
+
+                    <!-- Word Loaded View -->
+                    <div id="wordLoadedView" class="hidden w-full space-y-2 pointer-events-none">
+                        <div class="w-12 h-12 mx-auto rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                            </svg>
+                        </div>
+                        <p id="wordFileName" class="text-sm font-bold text-slate-800 break-all"></p>
+                        <p id="wordFileMeta" class="text-xs text-emerald-600 font-medium"></p>
+                        <p class="text-xs text-slate-400">點擊或重新拖曳可更換檔案</p>
+                    </div>
+                </div>
+
+                <!-- PDF Upload Card -->
+                <div id="pdfDropzone" class="dropzone rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer relative bg-slate-50/50 hover:bg-blue-50/40 border-2 border-dashed border-slate-300 transition group">
+                    <input type="file" id="pdfFileInput" accept=".pdf" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10">
+                    <div id="pdfEmptyView" class="space-y-3 pointer-events-none">
+                        <div class="w-14 h-14 mx-auto rounded-full bg-red-100 flex items-center justify-center text-red-600 group-hover:scale-105 transition transform">
+                            <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <p class="text-sm font-semibold text-slate-700">點選或拖曳上傳 PDF 檔</p>
+                            <p class="text-xs text-slate-400 mt-1">支援格式：.pdf (美編排版成品)</p>
+                        </div>
+                        <span class="inline-block px-3 py-1 bg-white border border-slate-200 rounded-lg text-xs text-red-600 font-medium shadow-2xs">選擇 PDF 檔案</span>
+                    </div>
+
+                    <!-- PDF Loaded View -->
+                    <div id="pdfLoadedView" class="hidden w-full space-y-2 pointer-events-none">
+                        <div class="w-12 h-12 mx-auto rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                            </svg>
+                        </div>
+                        <p id="pdfFileName" class="text-sm font-bold text-slate-800 break-all"></p>
+                        <p id="pdfFileMeta" class="text-xs text-emerald-600 font-medium"></p>
+                        <p class="text-xs text-slate-400">點擊或重新拖曳可更換檔案</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Test Samples Buttons -->
+            <div class="mt-6 pt-6 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4">
+                <div class="flex items-center space-x-2 text-xs text-slate-500">
+                    <svg class="w-4 h-4 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"></path>
+                    </svg>
+                    <span>快速載入本地樣本進行測試：</span>
+                    <button id="btnSampleBlockchain" class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-medium transition cursor-pointer">
+                        載入「區塊鏈課程」樣本 (3門課)
+                    </button>
+                    <button id="btnSampleJianzhen" class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-medium transition cursor-pointer">
+                        載入「鑒真數位課程」樣本 (4門課)
+                    </button>
+                </div>
+
+                <!-- Execute Button -->
+                <button id="btnStartCompare" disabled class="px-6 py-2.5 rounded-xl font-semibold text-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-blue-500/20 transition flex items-center space-x-2 cursor-pointer">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                    </svg>
+                    <span>開始自動校稿比對</span>
+                </button>
+            </div>
+        </section>
+
+        <!-- Loading Progress Indicator -->
+        <div id="loadingIndicator" class="hidden bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center space-y-4">
+            <div class="inline-block animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent"></div>
+            <h3 class="text-base font-semibold text-slate-800" id="loadingText">正在智慧解析檔案中...</h3>
+            <p class="text-xs text-slate-500">系統正在逐字比對課程名稱、時數、費用、點數及大綱內容</p>
+        </div>
+
+        <!-- Results Dashboard Section (Hidden Initially) -->
+        <section id="resultsSection" class="hidden space-y-6">
+
+            <!-- KPI Summary Cards -->
+            <div class="grid grid-cols-2 sm:grid-cols-5 gap-4">
+                <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+                    <p class="text-xs font-medium text-slate-500">比對課程總數</p>
+                    <p id="kpiTotal" class="text-2xl font-bold text-slate-900 mt-1">0</p>
+                    <span class="text-xs text-slate-400">總計檢查課程</span>
+                </div>
+                <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+                    <div class="flex items-center space-x-1.5">
+                        <span class="light-dot green"></span>
+                        <p class="text-xs font-medium text-emerald-700">完全相符 (綠燈)</p>
+                    </div>
+                    <p id="kpiMatch" class="text-2xl font-bold text-emerald-600 mt-1">0</p>
+                    <span class="text-xs text-emerald-500">欄位完全正確</span>
+                </div>
+                <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+                    <div class="flex items-center space-x-1.5">
+                        <span class="light-dot red"></span>
+                        <p class="text-xs font-medium text-red-700">嚴重錯誤 (紅燈)</p>
+                    </div>
+                    <p id="kpiError" class="text-2xl font-bold text-red-600 mt-1">0</p>
+                    <span class="text-xs text-red-500">時數/點數/名稱不符</span>
+                </div>
+                <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+                    <div class="flex items-center space-x-1.5">
+                        <span class="light-dot yellow"></span>
+                        <p class="text-xs font-medium text-amber-700">排版警示 (黃燈)</p>
+                    </div>
+                    <p id="kpiWarning" class="text-2xl font-bold text-amber-600 mt-1">0</p>
+                    <span class="text-xs text-amber-500">大綱或文字微差</span>
+                </div>
+                <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs col-span-2 sm:col-span-1">
+                    <div class="flex items-center space-x-1.5">
+                        <span class="light-dot gray"></span>
+                        <p class="text-xs font-medium text-slate-700">缺少未排 (灰燈)</p>
+                    </div>
+                    <p id="kpiMissing" class="text-2xl font-bold text-slate-600 mt-1">0</p>
+                    <span class="text-xs text-slate-400">Word有但PDF漏排</span>
+                </div>
+            </div>
+
+            <!-- Toolbar & Filter Controls -->
+            <div class="bg-white rounded-xl border border-slate-200 p-4 flex flex-col md:flex-row items-center justify-between gap-4 shadow-2xs no-print">
+                <!-- Status Filter Pills -->
+                <div class="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                    <span class="text-xs font-medium text-slate-400 mr-1">篩選：</span>
+                    <button class="filter-btn active px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-white transition" data-filter="all">全部 (<span id="countAll">0</span>)</button>
+                    <button class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-700 transition" data-filter="red">
+                        <span class="inline-block w-2 h-2 rounded-full bg-red-500 mr-1"></span>
+                        僅看錯誤 (<span id="countRed">0</span>)
+                    </button>
+                    <button class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 hover:bg-amber-50 hover:text-amber-700 transition" data-filter="yellow">
+                        <span class="inline-block w-2 h-2 rounded-full bg-amber-500 mr-1"></span>
+                        僅看警示 (<span id="countYellow">0</span>)
+                    </button>
+                    <button class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 transition" data-filter="green">
+                        <span class="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1"></span>
+                        僅看正確 (<span id="countGreen">0</span>)
+                    </button>
+                    <button class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 transition" data-filter="gray">
+                        <span class="inline-block w-2 h-2 rounded-full bg-slate-400 mr-1"></span>
+                        缺少項目 (<span id="countGray">0</span>)
+                    </button>
+                </div>
+
+                <!-- Search & Actions -->
+                <div class="flex items-center space-x-3 w-full md:w-auto justify-end">
+                    <!-- Search Input -->
+                    <div class="relative w-full md:w-56">
+                        <input type="text" id="searchInput" placeholder="搜尋代碼或名稱..." class="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition">
+                        <svg class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                        </svg>
+                    </div>
+
+                    <!-- Copy Report Button -->
+                    <button id="btnCopyReport" title="複製錯誤整理清單給美編" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer flex-shrink-0">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path>
+                        </svg>
+                        <span>複製校稿清單</span>
+                    </button>
+
+                    <!-- Export CSV Button -->
+                    <button id="btnExportCSV" title="匯出比對結果為 CSV 試算表" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer flex-shrink-0">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                        </svg>
+                        <span>匯出 CSV</span>
+                    </button>
+
+                    <!-- Print Button -->
+                    <button onclick="window.print()" title="列印或另存為 PDF 報告" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer flex-shrink-0">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path>
+                        </svg>
+                        <span>列印</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Course Comparison Cards Container -->
+            <div id="courseCardsContainer" class="space-y-6">
+                <!-- Injected dynamically by app.js -->
+            </div>
+
+            <!-- Empty State for filters -->
+            <div id="emptyFilterView" class="hidden bg-white rounded-2xl border border-slate-200 p-12 text-center">
+                <p class="text-sm font-medium text-slate-600">沒有符合篩選條件的課程項目</p>
+                <p class="text-xs text-slate-400 mt-1">請嘗試變更篩選標籤或清除搜尋關鍵字</p>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-6 right-6 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-lg text-xs font-medium transform transition-all duration-300 translate-y-20 opacity-0 z-50 flex items-center space-x-2">
+        <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+        </svg>
+        <span id="toastMessage">已複製到剪貼簿</span>
+    </div>
+
+    <!-- Application Core Script -->
+    <script src="app.js"></script>
+</body>
+</html>
