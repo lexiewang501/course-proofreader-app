@@ -20,6 +20,15 @@ const KNOWN_LABELS = [
     '後續推薦課程'
 ];
 
+// Fields strictly formatted as List[str] / Array<string>
+const LIST_FIELDS = new Set([
+    '課程內容',
+    '備註事項',
+    '適合對象',
+    '預備知識',
+    '先修課程'
+]);
+
 // Global Application State
 const state = {
     wordFile: null,
@@ -501,13 +510,13 @@ async function parseDocx(buffer) {
             '點數': '',
             '教材': '',
             '課程目標': '',
-            '適合對象': '',
-            '先修課程': '',
-            '預備知識': '',
+            '適合對象': [], // List[str]
+            '先修課程': [], // List[str]
+            '預備知識': [], // List[str]
             '課程內容': [], // List[str]
             '學會技能': '',
-            '備註事項': '',
-            '後續推薦課程': '',
+            '備註事項': [], // List[str]
+            '後續推薦課程': [], // List[str]
             source: 'Word'
         };
 
@@ -517,7 +526,7 @@ async function parseDocx(buffer) {
         for (let i = 0; i < rows.length; i++) {
             const row = rows[i];
             const rowFullText = row.map(c => c.fullText).join(' ').replace(/\s+/g, ' ').trim();
-            const firstCellText = row[0] ? row[0].fullText : '';
+            const firstCellText = row[0] ? row[0].fullText.trim() : '';
 
             // Metadata row
             if (rowFullText.includes('時數') || rowFullText.includes('費用') || rowFullText.includes('點數')) {
@@ -537,31 +546,29 @@ async function parseDocx(buffer) {
             // Check known section labels
             for (const label of KNOWN_LABELS) {
                 if (firstCellText === label || firstCellText.startsWith(label)) {
-                    if (label === '課程內容') {
-                        // Gather paragraphs from second cell or following cells
-                        let pItems = [];
-                        if (row.length >= 2) {
-                            pItems = row[1].paragraphs;
-                        }
-                        if (pItems.length <= 1) {
-                            // Split if needed
-                            const fullContent = row.slice(1).map(c => c.fullText).join(' ');
-                            pItems = splitOutlineItems(fullContent);
-                        }
-                        course['課程內容'] = pItems;
+                    if (LIST_FIELDS.has(label)) {
+                        const cellParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
+                        const cellFull = row.slice(1).map(c => c.fullText).join(' ').trim();
+                        course[label] = extractListItems(cellParas, cellFull);
                     } else if (label === '後續推薦課程') {
-                        const allParas = row.slice(1).flatMap(c => c.paragraphs).filter(p => p.trim().length > 0);
-                        course['後續推薦課程'] = allParas.length > 0 ? allParas.join('\n').trim() : row.slice(1).map(c => c.fullText).join(' ').trim();
+                        const allParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
+                        const fullRec = row.slice(1).map(c => c.fullText).join(' ').trim();
+                        course['後續推薦課程'] = allParas.length > 0 ? allParas : splitRecommendedCourses(fullRec);
                     } else {
                         const val = row.slice(1).map(c => c.fullText).join(' ').trim();
                         course[label] = val;
                     }
-                } else if (rowFullText.startsWith(label) && !course[label]) {
-                    const val = rowFullText.replace(new RegExp(`^${label}[：:\\s]*`), '').trim();
-                    if (label === '課程內容') {
-                        course['課程內容'] = splitOutlineItems(val);
-                    } else {
-                        course[label] = val;
+                } else if (rowFullText.startsWith(label)) {
+                    const isAlreadyPopulated = Array.isArray(course[label]) ? course[label].length > 0 : Boolean(course[label]);
+                    if (!isAlreadyPopulated) {
+                        const val = rowFullText.replace(new RegExp(`^${label}[：:\\s]*`), '').trim();
+                        if (LIST_FIELDS.has(label)) {
+                            course[label] = extractListItems([], val);
+                        } else if (label === '後續推薦課程') {
+                            course['後續推薦課程'] = splitRecommendedCourses(val);
+                        } else {
+                            course[label] = val;
+                        }
                     }
                 }
             }
@@ -625,12 +632,23 @@ async function parsePdf(buffer) {
         const labelRects = rects.filter(r => r.x < 100 && r.w >= 40 && r.w <= 80 && r.h >= 10);
         labelRects.sort((a, b) => b.top - a.top);
 
-        // 2. Find metadata anchor lines ("時數：")
+        // 2. Find metadata anchor lines: A true course metadata row has "時數"
+        // AND contains "費用", "點數", or "教材", strictly excluding notes like "完整練習時數："
         const metaList = [];
+        const yMapMeta = {};
         for (const it of items) {
-            if (it.str.includes('時數：') || it.str === '時數：' || (it.str === '時數' && it.x > 80)) {
-                if (!metaList.some(m => Math.abs(m.y - it.y) <= 5)) {
-                    metaList.push({ y: it.y });
+            const key = Math.round(it.y / 4) * 4;
+            if (!yMapMeta[key]) yMapMeta[key] = [];
+            yMapMeta[key].push(it);
+        }
+        for (const [keyY, lineItems] of Object.entries(yMapMeta)) {
+            const lineText = lineItems.map(i => i.str).join(' ');
+            const hasHours = /(?:^|\s|\|)時數[：:\s]*\d+/.test(lineText) || lineText.startsWith('時數');
+            const hasMetaContext = lineText.includes('費用') || lineText.includes('點數') || lineText.includes('教材');
+            if (hasHours && hasMetaContext) {
+                const avgY = lineItems.reduce((s, i) => s + i.y, 0) / lineItems.length;
+                if (!metaList.some(m => Math.abs(m.y - avgY) <= 8)) {
+                    metaList.push({ y: Math.round(avgY) });
                 }
             }
         }
@@ -668,6 +686,25 @@ async function parsePdf(buffer) {
                 courseSections.push({ label: lItem.str, top, bottom, y: lItem.y });
             }
 
+            // Determine strict contiguous non-overlapping intervals for each section to prevent boundary bleed
+            for (let s = 0; s < courseSections.length; s++) {
+                const cur = courseSections[s];
+                const prev = s > 0 ? courseSections[s - 1] : null;
+                const next = s + 1 < courseSections.length ? courseSections[s + 1] : null;
+
+                if (prev) {
+                    cur.effectiveTop = (prev.bottom + cur.top) / 2;
+                } else {
+                    cur.effectiveTop = cur.top + 2;
+                }
+
+                if (next) {
+                    cur.effectiveBottom = (cur.bottom + next.top) / 2;
+                } else {
+                    cur.effectiveBottom = cur.bottom - 2;
+                }
+            }
+
             // Determine vertical course header range
             let courseTop = 9999;
             if (i > 0) {
@@ -698,13 +735,13 @@ async function parsePdf(buffer) {
                 '點數': '',
                 '教材': '',
                 '課程目標': '',
-                '適合對象': '',
-                '先修課程': '',
-                '預備知識': '',
+                '適合對象': [], // List[str]
+                '先修課程': [], // List[str]
+                '預備知識': [], // List[str]
                 '課程內容': [], // List[str]
                 '學會技能': '',
-                '備註事項': '',
-                '後續推薦課程': '',
+                '備註事項': [], // List[str]
+                '後續推薦課程': [], // List[str]
                 source: 'PDF',
                 page: p
             };
@@ -741,16 +778,18 @@ async function parsePdf(buffer) {
             course['英文名稱'] = course.course_name_en;
             course['英文課名'] = course.course_name_en;
 
-            // Extract each section strictly isolated inside its vertical box [bottom, top]
+            // Extract each section strictly isolated inside its vertical partition (杜絕邊界文字滲透)
             for (const sec of courseSections) {
-                const secItems = items.filter(it => it.x >= 100 && it.y >= sec.bottom - 2 && it.y <= sec.top + 2);
+                const secItems = items.filter(it => it.x >= 88 && it.y > sec.effectiveBottom && it.y <= sec.effectiveTop);
                 secItems.sort((a, b) => b.y - a.y || a.x - b.x);
 
-                if (sec.label === '課程內容') {
-                    // Extract items strictly as List[str]
-                    course['課程內容'] = extractBulletList(secItems);
+                if (LIST_FIELDS.has(sec.label)) {
+                    course[sec.label] = extractListFromPdfSection(secItems, sec.label === '備註事項');
+                } else if (sec.label === '後續推薦課程') {
+                    const fullText = secItems.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
+                    course['後續推薦課程'] = splitRecommendedCourses(fullText);
                 } else {
-                    // Strictly isolate 備註事項, 後續推薦課程, 適合對象, 預備知識, etc.
+                    // Strictly isolate 課程目標, 學會技能, etc.
                     const text = secItems.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
                     course[sec.label] = text;
                 }
@@ -763,41 +802,285 @@ async function parsePdf(buffer) {
     return courses;
 }
 
-function extractBulletList(items) {
-    if (!items || items.length === 0) return [];
-    // Handle multi-column layouts by sorting column 1 then column 2
-    const col1 = items.filter(it => it.x < 250).sort((a, b) => b.y - a.y || a.x - b.x);
-    const col2 = items.filter(it => it.x >= 250).sort((a, b) => b.y - a.y || a.x - b.x);
+// ==========================================
+// List Field Extraction & Alignment Helpers
+// ==========================================
 
-    let fullText = '';
-    if (col1.length > 0 && col2.length > 0 && Math.abs(col1[0].x - col2[0].x) > 100) {
-        fullText = col1.map(it => it.str).join(' ') + ' ' + col2.map(it => it.str).join(' ');
-    } else {
-        fullText = items.map(it => it.str).join(' ');
-    }
-
-    const bulletList = [];
-    const parts = fullText.split(/(?=\b\d+\.|\s*•\s*)/);
-    for (const part of parts) {
-        const clean = part.replace(/^[\s•\d.]+/, '').trim();
-        if (clean.length > 0) {
-            bulletList.push(clean);
-        }
-    }
-    return bulletList.length > 0 ? bulletList : [fullText.trim()];
+function cleanItemText(str) {
+    if (!str) return '';
+    return str.replace(/^[\s•●\-\*※\d.、()（）]+/, '').trim();
 }
 
+/**
+ * Splits text with numbered bullets (1., 2.) or symbols (•, ※) into clean array of items.
+ * Does not split on hyphens inside words (e.g. Man-in-the-middle).
+ */
 function splitOutlineItems(text) {
     if (!text) return [];
-    const items = [];
-    const parts = text.split(/(?=\b\d+\.|\s*•\s*)/);
-    for (const part of parts) {
-        const clean = part.replace(/^[\s•\d.]+/, '').trim();
-        if (clean.length > 0) {
-            items.push(clean);
+    const parts = text.split(/(?=\b\d+[.、]|\s*[•●※]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+)/);
+    const res = [];
+    for (const p of parts) {
+        const trimmed = p.trim();
+        if (trimmed) res.push(trimmed);
+    }
+    return res.length > 0 ? res : [text.trim()];
+}
+
+/**
+ * Extracts list items from Word table cell paragraphs.
+ * If paragraphs contain embedded bullets or numbering, splits them cleanly.
+ */
+function extractListItems(paragraphs, fullText) {
+    let items = [];
+    if (paragraphs && paragraphs.length > 0) {
+        for (const p of paragraphs) {
+            const pTrimmed = p.trim();
+            if (!pTrimmed) continue;
+            const split = splitOutlineItems(pTrimmed);
+            if (split.length > 1) {
+                items.push(...split);
+            } else {
+                items.push(pTrimmed);
+            }
         }
     }
-    return items.length > 0 ? items : [text.trim()];
+    if (items.length === 0 && fullText && fullText.trim()) {
+        items = splitOutlineItems(fullText.trim());
+    }
+    return items.map(it => it.trim()).filter(Boolean);
+}
+
+/**
+ * Dynamically detects column boundaries (X coordinates) in a section.
+ * Returns array of split X coordinates (empty array for single column).
+ */
+function getColumnSplits(secItems) {
+    if (!secItems || secItems.length === 0) return [];
+    const bullets = secItems.filter(it => 
+        /^\d+[.、]/.test(it.str) || 
+        /^[•●※]/.test(it.str) ||
+        /^Lesson\s*\d+/i.test(it.str)
+    );
+
+    if (bullets.length >= 2) {
+        const bulletXs = bullets.map(b => b.x).sort((a, b) => a - b);
+        const clusters = [];
+        for (const x of bulletXs) {
+            const last = clusters[clusters.length - 1];
+            if (!last || x - last.max > 40) {
+                clusters.push({ min: x, max: x, count: 1 });
+            } else {
+                last.max = Math.max(last.max, x);
+                last.min = Math.min(last.min, x);
+                last.count++;
+            }
+        }
+        const validClusters = clusters.filter(c => c.count >= 2 || (clusters.length <= 3 && c.count >= 1 && c.min > 200));
+        if (validClusters.length >= 2) {
+            const splits = [];
+            for (let i = 1; i < validClusters.length; i++) {
+                splits.push(validClusters[i].min - 8);
+            }
+            return splits;
+        }
+    }
+
+    const intervals = secItems.map(it => {
+        const charWidth = /[\u4e00-\u9fa5]/.test(it.str) ? 10 : 6;
+        return { start: it.x, end: it.x + Math.max(it.str.length * charWidth, 10) };
+    });
+
+    let bestGutterStart = -1, bestGutterWidth = 0;
+    let inGutter = false, currentStart = 0;
+    for (let testX = 220; testX <= 380; testX += 2) {
+        const hasText = intervals.some(inv => testX >= inv.start && testX <= inv.end);
+        if (!hasText) {
+            if (!inGutter) {
+                inGutter = true;
+                currentStart = testX;
+            }
+        } else {
+            if (inGutter) {
+                inGutter = false;
+                const width = testX - currentStart;
+                if (width > bestGutterWidth) {
+                    bestGutterWidth = width;
+                    bestGutterStart = currentStart;
+                }
+            }
+        }
+    }
+    if (bestGutterWidth >= 16) {
+        return [Math.round(bestGutterStart + bestGutterWidth / 2)];
+    }
+    return [];
+}
+
+/**
+ * Groups items into horizontal visual lines based on vertical baseline (Y).
+ */
+function groupItemsIntoVisualLines(items) {
+    if (!items || items.length === 0) return [];
+    const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
+    const lines = [];
+    let curY = null;
+    let curLineItems = [];
+
+    for (const it of sorted) {
+        if (curY === null || Math.abs(curY - it.y) > 3.5) {
+            if (curLineItems.length > 0) {
+                curLineItems.sort((a, b) => a.x - b.x);
+                const startX = curLineItems[0].x;
+                const lastItem = curLineItems[curLineItems.length - 1];
+                const charW = /[\u4e00-\u9fa5]/.test(lastItem.str) ? 10 : 6;
+                const endX = lastItem.x + Math.max(lastItem.str.length * charW, 10);
+                lines.push({
+                    y: curY,
+                    startX,
+                    endX,
+                    text: curLineItems.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim()
+                });
+            }
+            curY = it.y;
+            curLineItems = [it];
+        } else {
+            curLineItems.push(it);
+        }
+    }
+    if (curLineItems.length > 0) {
+        curLineItems.sort((a, b) => a.x - b.x);
+        const startX = curLineItems[0].x;
+        const lastItem = curLineItems[curLineItems.length - 1];
+        const charW = /[\u4e00-\u9fa5]/.test(lastItem.str) ? 10 : 6;
+        const endX = lastItem.x + Math.max(lastItem.str.length * charW, 10);
+        lines.push({
+            y: curY,
+            startX,
+            endX,
+            text: curLineItems.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim()
+        });
+    }
+    return lines;
+}
+
+/**
+ * Assembles visual lines into discrete list items, intelligently distinguishing
+ * new items from line-wrapped continuation text.
+ */
+function assembleLinesIntoItems(lines, isNotes = false) {
+    if (!lines || lines.length === 0) return [];
+    const items = [];
+    let currentItem = '';
+
+    const colMinX = Math.min(...lines.map(l => l.startX));
+    const colMaxX = Math.max(...lines.map(l => l.endX));
+
+    function isNewItemStart(line, prevLine) {
+        const text = line.text;
+        const prevText = prevLine ? prevLine.text : '';
+
+        // 1. Explicit bullet / numbering
+        if (/^\d+[.、]/.test(text)) return true;
+        if (/^[•●※\-\*]/.test(text)) return true;
+        if (/^(?:Lesson|Module|Chapter|Unit|Section|Topic)\s*\d+/i.test(text)) return true;
+
+        // 2. Colon headers (e.g. 課程優惠方案：, 限時優惠：, 續報優惠：, 學生優惠價：, 重聽服務：, 實務應用：)
+        if (/^[^：:\n]{2,8}[：:]/.test(text)) return true;
+
+        // 3. If previous line ended with colon '：'
+        if (prevText && /[：:]\s*$/.test(prevText)) return true;
+
+        // 4. In notes (備註事項), phrases starting at base margin
+        if (isNotes) {
+            if (/^(?:白天班|晚上班|週末班|假日班|上課時間|報名|課程結束|贈送|免費|本課程|出席率|重聽|早鳥|限時)/.test(text)) return true;
+            if (line.startX <= colMinX + 4 && !/[，、(（與和或的之及]$/.test(prevText)) {
+                return true;
+            }
+        }
+
+        // 5. In general, if previous line ended before right margin, author finished that item
+        if (prevLine && prevLine.endX < colMaxX - 35) {
+            if (!/[，、(（與和或的之及]$/.test(prevText) && line.startX <= colMinX + 6) {
+                return true;
+            }
+        }
+
+        // 6. If previous line closed parenthesis and this line is at margin
+        if (prevLine && /[)）]$/.test(prevText) && line.startX <= colMinX + 4) {
+            return true;
+        }
+
+        return false;
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const prevLine = i > 0 ? lines[i - 1] : null;
+
+        if (i === 0) {
+            currentItem = line.text;
+        } else {
+            if (isNewItemStart(line, prevLine)) {
+                if (currentItem) items.push(currentItem.trim());
+                currentItem = line.text;
+            } else {
+                currentItem += ' ' + line.text;
+            }
+        }
+    }
+    if (currentItem) items.push(currentItem.trim());
+    return items.map(it => it.replace(/\s+/g, ' ').trim()).filter(Boolean);
+}
+
+/**
+ * Extracts list items from PDF section items inside a bounding box.
+ * Preserves dynamic multi-column reading order and sorts by explicit numbers if present.
+ */
+function extractListFromPdfSection(secItems, isNotes = false) {
+    if (!secItems || secItems.length === 0) return [];
+    const splits = getColumnSplits(secItems);
+
+    if (splits.length === 0) {
+        const lines = groupItemsIntoVisualLines(secItems);
+        return assembleLinesIntoItems(lines, isNotes);
+    }
+
+    const colItems = [];
+    for (let i = 0; i <= splits.length; i++) {
+        const minX = i === 0 ? 0 : splits[i - 1];
+        const maxX = i === splits.length ? 9999 : splits[i];
+        const itemsInCol = secItems.filter(it => it.x >= minX && it.x < maxX);
+        if (itemsInCol.length > 0) {
+            const lines = groupItemsIntoVisualLines(itemsInCol);
+            const assembled = assembleLinesIntoItems(lines, isNotes);
+            colItems.push(...assembled);
+        }
+    }
+
+    return sortListItems(colItems);
+}
+
+/**
+ * Sorts array of list items by leading number (e.g. 1., 2., 3.) if present.
+ */
+function sortListItems(items) {
+    if (!items || items.length <= 1) return items;
+    const numbered = items.map(it => {
+        const m = it.match(/^(\d+)[.、]/);
+        return { num: m ? parseInt(m[1], 10) : null, text: it };
+    });
+    const hasNumbers = numbered.filter(x => x.num !== null).length >= items.length * 0.6;
+    if (hasNumbers) {
+        return [...items].sort((a, b) => {
+            const na = a.match(/^(\d+)[.、]/);
+            const nb = b.match(/^(\d+)[.、]/);
+            if (na && nb) return parseInt(na[1], 10) - parseInt(nb[1], 10);
+            if (na) return -1;
+            if (nb) return 1;
+            return 0;
+        });
+    }
+    return items;
 }
 
 function splitRecommendedCourses(text) {
@@ -810,8 +1093,8 @@ function splitRecommendedCourses(text) {
         return trimmed.split(/\n+/).map(s => s.trim()).filter(Boolean);
     }
 
-    // 2. If contains course codes with colon (e.g. BCIC：... BCFS：...)
-    const matches = trimmed.match(/[A-Za-z0-9_-]{2,10}[：:][\s\S]*?(?=(?:[A-Za-z0-9_-]{2,10}[：:]|$))/g);
+    // 2. If contains course codes with colon (e.g. BCIC：... BCFS：... COASP ：...)
+    const matches = trimmed.match(/[A-Za-z0-9_-]{2,10}\s*[：:][\s\S]*?(?=(?:[A-Za-z0-9_-]{2,10}\s*[：:]|$))/g);
     if (matches && matches.length > 0) {
         return matches.map(s => s.trim()).filter(Boolean);
     }
@@ -822,6 +1105,114 @@ function splitRecommendedCourses(text) {
     }
 
     return [trimmed];
+}
+
+/**
+ * Needleman-Wunsch sequence alignment for Word and PDF list items.
+ * Guarantees optimal horizontal alignment so missing or modified items are clearly visible side-by-side.
+ */
+function alignListItems(wItems, pItems, fieldLabel) {
+    if (!wItems.length && !pItems.length) {
+        return { status: 'green', desc: `雙方皆無${fieldLabel}`, details: [] };
+    }
+
+    const sortedP = sortListItems(pItems);
+    const sortedW = sortListItems(wItems);
+
+    const m = sortedW.length;
+    const n = sortedP.length;
+
+    function score(i, j) {
+        const w = sortedW[i];
+        const p = sortedP[j];
+        const wNorm = normalizeText(cleanItemText(w));
+        const pNorm = normalizeText(cleanItemText(p));
+        if (!wNorm && !pNorm) return 1.0;
+        if (wNorm === pNorm) return 2.0;
+        const sim = calculateSimilarity(wNorm, pNorm);
+        if (sim >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm)) {
+            return 1.0 + sim;
+        }
+        return -1.0;
+    }
+
+    const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+    const gap = -0.5;
+
+    for (let i = 0; i <= m; i++) dp[i][0] = i * gap;
+    for (let j = 0; j <= n; j++) dp[0][j] = j * gap;
+
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            const matchScore = dp[i - 1][j - 1] + score(i - 1, j - 1);
+            const delScore = dp[i - 1][j] + gap;
+            const insScore = dp[i][j - 1] + gap;
+            dp[i][j] = Math.max(matchScore, delScore, insScore);
+        }
+    }
+
+    const aligned = [];
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && Math.abs(dp[i][j] - (dp[i - 1][j - 1] + score(i - 1, j - 1))) < 1e-6) {
+            aligned.unshift({ word: sortedW[i - 1], pdf: sortedP[j - 1] });
+            i--;
+            j--;
+        } else if (i > 0 && Math.abs(dp[i][j] - (dp[i - 1][j] + gap)) < 1e-6) {
+            aligned.unshift({ word: sortedW[i - 1], pdf: null });
+            i--;
+        } else {
+            aligned.unshift({ word: null, pdf: sortedP[j - 1] });
+            j--;
+        }
+    }
+
+    const details = [];
+    let matchCount = 0;
+    let hasRed = false;
+    let hasYellow = false;
+
+    aligned.forEach((pair, idx) => {
+        const w = pair.word;
+        const p = pair.pdf;
+        if (w && p) {
+            const wNorm = normalizeText(cleanItemText(w));
+            const pNorm = normalizeText(cleanItemText(p));
+            if (wNorm === pNorm) {
+                matchCount++;
+                details.push({ index: idx + 1, status: 'green', word: w, pdf: p, desc: '相符' });
+            } else if (calculateSimilarity(wNorm, pNorm) >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm)) {
+                matchCount++;
+                hasYellow = true;
+                details.push({ index: idx + 1, status: 'yellow', word: w, pdf: p, desc: '文字微差' });
+            } else {
+                hasRed = true;
+                details.push({ index: idx + 1, status: 'red', word: w, pdf: p, desc: '項目內容不符' });
+            }
+        } else if (w && !p) {
+            hasRed = true;
+            details.push({ index: idx + 1, status: 'red', word: w, pdf: null, desc: 'PDF 漏排此項目' });
+        } else if (!w && p) {
+            hasYellow = true;
+            details.push({ index: idx + 1, status: 'yellow', word: null, pdf: p, desc: 'PDF 多排此項目' });
+        }
+    });
+
+    let overallStatus = 'green';
+    let overallDesc = `${fieldLabel}相符 (${sortedW.length} 項)`;
+    if (hasRed) {
+        overallStatus = 'red';
+        overallDesc = `${fieldLabel}內容有缺漏或不符 (Word: ${sortedW.length}項, PDF: ${sortedP.length}項)`;
+    } else if (hasYellow) {
+        overallStatus = 'yellow';
+        overallDesc = `${fieldLabel}文字有微差或多排 (Word: ${sortedW.length}項, PDF: ${sortedP.length}項)`;
+    }
+
+    return {
+        status: overallStatus,
+        desc: overallDesc,
+        details
+    };
 }
 
 // ==========================================
@@ -953,9 +1344,14 @@ function compareCourseData(wordCourses, pdfCourses) {
                     '點數': { status: 'gray', label: '點數', word: `${wCourse['點數']} 點`, pdf: '-', desc: '缺少' },
                     '費用': { status: 'gray', label: '費用', word: `${Number(wCourse['費用'] || 0).toLocaleString()} 元`, pdf: '-', desc: '缺少' },
                     '教材': { status: 'gray', label: '教材', word: wCourse['教材'] || '-', pdf: '-', desc: '缺少' },
-                    '課程內容': { status: 'gray', label: '課程內容', word: `${wCourse['課程內容'].length} 項內容`, pdf: '-', desc: '缺少' },
-                    '備註事項': { status: 'gray', label: '備註事項', word: wCourse['備註事項'] || '-', pdf: '-', desc: '缺少' },
-                    '後續推薦課程': { status: 'gray', label: '後續推薦課程', word: wCourse['後續推薦課程'] || '-', pdf: '-', desc: '缺少' }
+                    '課程內容': createMissingListField('課程內容', wCourse['課程內容'], true),
+                    '備註事項': createMissingListField('備註事項', wCourse['備註事項'], true),
+                    '後續推薦課程': createMissingListField('後續推薦課程', wCourse['後續推薦課程'], true),
+                    '適合對象': createMissingListField('適合對象', wCourse['適合對象'], true),
+                    '預備知識': createMissingListField('預備知識', wCourse['預備知識'], true),
+                    '先修課程': createMissingListField('先修課程', wCourse['先修課程'], true),
+                    '課程目標': { status: 'gray', label: '課程目標', word: (Array.isArray(wCourse['課程目標']) ? wCourse['課程目標'].join('\n') : wCourse['課程目標']) || '-', pdf: '-', desc: '缺少' },
+                    '學會技能': { status: 'gray', label: '學會技能', word: (Array.isArray(wCourse['學會技能']) ? wCourse['學會技能'].join('\n') : wCourse['學會技能']) || '-', pdf: '-', desc: '缺少' }
                 }
             });
         }
@@ -988,15 +1384,39 @@ function compareCourseData(wordCourses, pdfCourses) {
                     '點數': { status: 'gray', label: '點數', word: '-', pdf: `${pCourse['點數']} 點`, desc: '原稿無' },
                     '費用': { status: 'gray', label: '費用', word: '-', pdf: `${Number(pCourse['費用'] || 0).toLocaleString()} 元`, desc: '原稿無' },
                     '教材': { status: 'gray', label: '教材', word: '-', pdf: pCourse['教材'] || '-', desc: '原稿無' },
-                    '課程內容': { status: 'gray', label: '課程內容', word: '-', pdf: `${pCourse['課程內容'].length} 項內容`, desc: '原稿無' },
-                    '備註事項': { status: 'gray', label: '備註事項', word: '-', pdf: pCourse['備註事項'] || '-', desc: '原稿無' },
-                    '後續推薦課程': { status: 'gray', label: '後續推薦課程', word: '-', pdf: pCourse['後續推薦課程'] || '-', desc: '原稿無' }
+                    '課程內容': createMissingListField('課程內容', pCourse['課程內容'], false),
+                    '備註事項': createMissingListField('備註事項', pCourse['備註事項'], false),
+                    '後續推薦課程': createMissingListField('後續推薦課程', pCourse['後續推薦課程'], false),
+                    '適合對象': createMissingListField('適合對象', pCourse['適合對象'], false),
+                    '預備知識': createMissingListField('預備知識', pCourse['預備知識'], false),
+                    '先修課程': createMissingListField('先修課程', pCourse['先修課程'], false),
+                    '課程目標': { status: 'gray', label: '課程目標', word: '-', pdf: (Array.isArray(pCourse['課程目標']) ? pCourse['課程目標'].join('\n') : pCourse['課程目標']) || '-', desc: '原稿無' },
+                    '學會技能': { status: 'gray', label: '學會技能', word: '-', pdf: (Array.isArray(pCourse['學會技能']) ? pCourse['學會技能'].join('\n') : pCourse['學會技能']) || '-', desc: '原稿無' }
                 }
             });
         }
     }
 
     return results;
+}
+
+function createMissingListField(label, rawVal, isWord) {
+    const arr = Array.isArray(rawVal) ? rawVal : (rawVal ? [rawVal] : []);
+    return {
+        status: 'gray',
+        label,
+        isList: true,
+        word: isWord ? `${arr.length} 個項目` : '-',
+        pdf: isWord ? '-' : `${arr.length} 個項目`,
+        desc: isWord ? 'PDF 缺少此課程' : 'Word 原稿無此課程',
+        details: arr.map((item, i) => ({
+            index: i + 1,
+            status: 'gray',
+            word: isWord ? item : null,
+            pdf: isWord ? null : item,
+            desc: isWord ? '未排入 PDF' : '原稿未列出'
+        }))
+    };
 }
 
 function compareSinglePair(w, p) {
@@ -1136,12 +1556,19 @@ function compareSinglePair(w, p) {
         hasRed = true;
     }
 
-    // 7. 課程內容 (Rule 1 & 2: 保持嚴格原名『課程內容』，List[str] 隔離比對)
-    const contentDiff = compareCourseContent(w['課程內容'], p['課程內容']);
+    // 7. 課程內容 (Rule 1 & 2: 保持嚴格原名『課程內容』，List[str] 隔離比對與水平對齊)
+    const contentDiff = alignListItems(
+        Array.isArray(w['課程內容']) ? w['課程內容'] : (w['課程內容'] ? [w['課程內容']] : []),
+        Array.isArray(p['課程內容']) ? p['課程內容'] : (p['課程內容'] ? [p['課程內容']] : []),
+        '課程內容'
+    );
     fields['課程內容'] = {
         label: '課程內容',
-        word: `${w['課程內容'].length} 個項目`,
-        pdf: `${p['課程內容'].length} 個項目`,
+        isList: true,
+        word: `${(w['課程內容'] || []).length} 個項目`,
+        pdf: `${(p['課程內容'] || []).length} 個項目`,
+        wordItems: Array.isArray(w['課程內容']) ? w['課程內容'] : [],
+        pdfItems: Array.isArray(p['課程內容']) ? p['課程內容'] : [],
         status: contentDiff.status,
         desc: contentDiff.desc,
         details: contentDiff.details
@@ -1149,132 +1576,184 @@ function compareSinglePair(w, p) {
     if (contentDiff.status === 'red') hasRed = true;
     if (contentDiff.status === 'yellow') hasYellow = true;
 
-    // 8. 備註事項 (Rule 2 & 4: 獨立欄位隔離，不混入課程內容)
-    const wNotes = normalizeText(w['備註事項'] || '');
-    const pNotes = normalizeText(p['備註事項'] || '');
-    if (!wNotes && !pNotes) {
-        fields['備註事項'] = { label: '備註事項', word: '(無)', pdf: '(無)', status: 'green', desc: '雙方皆無備註' };
-    } else if (wNotes === pNotes) {
-        fields['備註事項'] = { label: '備註事項', word: w['備註事項'], pdf: p['備註事項'], status: 'green', desc: '備註相符' };
-    } else if (calculateSimilarity(wNotes, pNotes) > 0.7) {
-        fields['備註事項'] = { label: '備註事項', word: w['備註事項'], pdf: p['備註事項'], status: 'yellow', desc: '備註文字微調' };
-        hasYellow = true;
-    } else {
-        fields['備註事項'] = { label: '備註事項', word: w['備註事項'] || '(無)', pdf: p['備註事項'] || '(漏排)', status: 'red', desc: '備註事項不一致或漏排！' };
-        hasRed = true;
-    }
+    // 8. 備註事項 (Rule 2 & 4: 獨立欄位隔離，List[str] 陣列與水平對齊)
+    const notesDiff = alignListItems(
+        Array.isArray(w['備註事項']) ? w['備註事項'] : (w['備註事項'] ? [w['備註事項']] : []),
+        Array.isArray(p['備註事項']) ? p['備註事項'] : (p['備註事項'] ? [p['備註事項']] : []),
+        '備註事項'
+    );
+    fields['備註事項'] = {
+        label: '備註事項',
+        isList: true,
+        word: `${(w['備註事項'] || []).length} 個項目`,
+        pdf: `${(p['備註事項'] || []).length} 個項目`,
+        wordItems: Array.isArray(w['備註事項']) ? w['備註事項'] : [],
+        pdfItems: Array.isArray(p['備註事項']) ? p['備註事項'] : [],
+        status: notesDiff.status,
+        desc: notesDiff.desc,
+        details: notesDiff.details
+    };
+    if (notesDiff.status === 'red') hasRed = true;
+    if (notesDiff.status === 'yellow') hasYellow = true;
 
     // 9. 後續推薦課程 (業務規則：PDF 只會抓取 Word 的第一個推薦課程，若有第2、第3個推薦課程未排上 PDF 視為正常)
-    const wRecRaw = (w['後續推薦課程'] || '').trim();
-    const pRecRaw = (p['後續推薦課程'] || '').trim();
-    const wRecList = splitRecommendedCourses(wRecRaw);
+    const wRecList = Array.isArray(w['後續推薦課程'])
+        ? w['後續推薦課程']
+        : splitRecommendedCourses(w['後續推薦課程'] || '');
+    const pRecList = Array.isArray(p['後續推薦課程'])
+        ? p['後續推薦課程']
+        : splitRecommendedCourses(p['後續推薦課程'] || '');
+
     const wFirstRec = wRecList.length > 0 ? wRecList[0] : '';
+    const pFirstRec = pRecList.length > 0 ? pRecList[0] : '';
 
-    const wFirstNorm = normalizeText(wFirstRec);
-    const wAllNorm = normalizeText(wRecRaw);
-    const pRecNorm = normalizeText(pRecRaw);
+    const wFirstNorm = normalizeText(cleanItemText(wFirstRec));
+    const pFirstNorm = normalizeText(cleanItemText(pFirstRec));
+    const wAllNorm = normalizeText(cleanItemText(wRecList.join(' ')));
 
-    if (!wRecRaw && !pRecRaw) {
-        fields['後續推薦課程'] = { label: '後續推薦課程', word: '(無)', pdf: '(無)', status: 'green', desc: '雙方皆無推薦課程' };
-    } else if (wRecRaw && !pRecRaw) {
-        fields['後續推薦課程'] = {
-            label: '後續推薦課程',
-            word: wFirstRec + (wRecList.length > 1 ? ` (Word 另有 ${wRecList.length - 1} 門)` : ''),
-            pdf: '(未排/漏排)',
-            status: 'red',
-            desc: 'PDF 漏排首門推薦課程！'
-        };
-        hasRed = true;
-    } else if (!wRecRaw && pRecRaw) {
+    if (wRecList.length === 0 && pRecList.length === 0) {
         fields['後續推薦課程'] = {
             label: '後續推薦課程',
             word: '(無)',
-            pdf: pRecRaw,
+            pdf: '(無)',
+            status: 'green',
+            desc: '雙方皆無推薦課程'
+        };
+    } else if (wRecList.length > 0 && pRecList.length === 0) {
+        fields['後續推薦課程'] = {
+            label: '後續推薦課程',
+            isList: true,
+            status: 'red',
+            desc: 'PDF 漏排首門推薦課程！',
+            details: wRecList.map((c, idx) => ({
+                index: idx + 1,
+                word: c + (idx === 0 ? ' (首門推薦)' : ' (依規則免排PDF)'),
+                pdf: idx === 0 ? null : '(依規則免排)',
+                status: idx === 0 ? 'red' : 'gray',
+                desc: idx === 0 ? 'PDF 漏排此首門推薦課程！' : '第2門以上未排PDF視為正常'
+            }))
+        };
+        hasRed = true;
+    } else if (wRecList.length === 0 && pRecList.length > 0) {
+        fields['後續推薦課程'] = {
+            label: '後續推薦課程',
+            word: '(無)',
+            pdf: pRecList.join('\n'),
             status: 'yellow',
             desc: 'Word 原稿無推薦課程，但 PDF 有排版'
         };
         hasYellow = true;
     } else {
-        const isMatch = (wFirstNorm === pRecNorm) || (wAllNorm === pRecNorm);
-        const simFirst = calculateSimilarity(wFirstNorm, pRecNorm);
-        const simAll = calculateSimilarity(wAllNorm, pRecNorm);
+        const isMatch = (wFirstNorm === pFirstNorm) || (wAllNorm === pFirstNorm);
+        const simFirst = calculateSimilarity(wFirstNorm, pFirstNorm);
+        const simAll = calculateSimilarity(wAllNorm, pFirstNorm);
         const maxSim = Math.max(simFirst, simAll);
 
+        let recStatus = 'green';
+        let recDesc = '首門推薦課程相符';
         if (isMatch) {
-            const extraNote = wRecList.length > 1
+            recStatus = 'green';
+            recDesc = wRecList.length > 1
                 ? `首門推薦課程相符 (Word 共 ${wRecList.length} 門，美編依規則僅排首門，正常)`
                 : '推薦課程相符';
-            fields['後續推薦課程'] = {
-                label: '後續推薦課程',
-                word: wFirstRec + (wRecList.length > 1 ? ` (Word 另有 ${wRecList.length - 1} 門)` : ''),
-                pdf: pRecRaw,
-                status: 'green',
-                desc: extraNote
-            };
-        } else if (maxSim > 0.75 || wFirstNorm.includes(pRecNorm) || pRecNorm.includes(wFirstNorm)) {
-            fields['後續推薦課程'] = {
-                label: '後續推薦課程',
-                word: wFirstRec + (wRecList.length > 1 ? ` (Word 另有 ${wRecList.length - 1} 門)` : ''),
-                pdf: pRecRaw,
-                status: 'yellow',
-                desc: '推薦課程文字微差 (首門推薦課程大致相符)'
-            };
+        } else if (maxSim > 0.75 || wFirstNorm.includes(pFirstNorm) || pFirstNorm.includes(wFirstNorm)) {
+            recStatus = 'yellow';
+            recDesc = '推薦課程文字微差 (首門推薦課程大致相符)';
             hasYellow = true;
         } else {
-            fields['後續推薦課程'] = {
-                label: '後續推薦課程',
-                word: wFirstRec,
-                pdf: pRecRaw,
-                status: 'red',
-                desc: `推薦課程不符！Word 首門為「${wFirstRec}」，但 PDF 為「${pRecRaw}」`
-            };
+            recStatus = 'red';
+            recDesc = `推薦課程不符！Word 首門為「${wFirstRec}」，但 PDF 為「${pFirstRec}」`;
             hasRed = true;
         }
-    }
 
-    // 10. 適合對象
-    const wTarget = normalizeText(w['適合對象'] || '');
-    const pTarget = normalizeText(p['適合對象'] || '');
-    if (!wTarget && !pTarget) {
-        fields['適合對象'] = { label: '適合對象', word: '(無)', pdf: '(無)', status: 'green', desc: '無資訊' };
-    } else if (wTarget === pTarget) {
-        fields['適合對象'] = { label: '適合對象', word: w['適合對象'], pdf: p['適合對象'], status: 'green', desc: '相符' };
-    } else if (calculateSimilarity(wTarget, pTarget) > 0.7) {
-        fields['適合對象'] = { label: '適合對象', word: w['適合對象'], pdf: p['適合對象'], status: 'yellow', desc: '對象描述微差' };
-        hasYellow = true;
-    } else {
-        fields['適合對象'] = { label: '適合對象', word: w['適合對象'] || '(無)', pdf: p['適合對象'] || '(漏排)', status: 'red', desc: '適合對象不一致' };
-        hasRed = true;
-    }
-
-    // 11. 預備知識
-    const wPrereq = normalizeText(w['預備知識'] || '');
-    const pPrereq = normalizeText(p['預備知識'] || '');
-    if (!wPrereq && !pPrereq) {
-        fields['預備知識'] = { label: '預備知識', word: '(無)', pdf: '(無)', status: 'green', desc: '無預備知識' };
-    } else if (wPrereq === pPrereq) {
-        fields['預備知識'] = { label: '預備知識', word: w['預備知識'], pdf: p['預備知識'], status: 'green', desc: '相符' };
-    } else if (calculateSimilarity(wPrereq, pPrereq) > 0.7) {
-        fields['預備知識'] = { label: '預備知識', word: w['預備知識'], pdf: p['預備知識'], status: 'yellow', desc: '文字微差' };
-        hasYellow = true;
-    } else {
-        fields['預備知識'] = { label: '預備知識', word: w['預備知識'] || '(無)', pdf: p['預備知識'] || '(漏排)', status: 'red', desc: '預備知識不一致' };
-        hasRed = true;
-    }
-
-    // 12. 先修課程 (if present in Word)
-    if (w['先修課程'] || p['先修課程']) {
-        const wPre = normalizeText(w['先修課程'] || '');
-        const pPre = normalizeText(p['先修課程'] || '');
-        if (wPre === pPre) {
-            fields['先修課程'] = { label: '先修課程', word: w['先修課程'], pdf: p['先修課程'], status: 'green', desc: '相符' };
-        } else if (calculateSimilarity(wPre, pPre) > 0.7) {
-            fields['先修課程'] = { label: '先修課程', word: w['先修課程'], pdf: p['先修課程'], status: 'yellow', desc: '文字微調' };
-            hasYellow = true;
-        } else {
-            fields['先修課程'] = { label: '先修課程', word: w['先修課程'] || '(無)', pdf: p['先修課程'] || '(漏排)', status: 'red', desc: '先修課程不符！' };
-            hasRed = true;
+        const recDetails = [
+            {
+                index: 1,
+                word: wFirstRec + ' (首門推薦)',
+                pdf: pFirstRec,
+                status: recStatus,
+                desc: isMatch ? '首門推薦課程相符' : (recStatus === 'yellow' ? '文字微差' : '首門課程不符')
+            }
+        ];
+        for (let ri = 1; ri < wRecList.length; ri++) {
+            recDetails.push({
+                index: ri + 1,
+                word: wRecList[ri] + ' (依規則免排PDF)',
+                pdf: '(依規則免排)',
+                status: 'gray',
+                desc: '第2門以上推薦課程未排PDF視為正常'
+            });
         }
+
+        fields['後續推薦課程'] = {
+            label: '後續推薦課程',
+            isList: true,
+            status: recStatus,
+            desc: recDesc,
+            details: recDetails
+        };
+    }
+
+    // 10. 適合對象 (List[str] 陣列比對與水平對齊)
+    const targetDiff = alignListItems(
+        Array.isArray(w['適合對象']) ? w['適合對象'] : (w['適合對象'] ? [w['適合對象']] : []),
+        Array.isArray(p['適合對象']) ? p['適合對象'] : (p['適合對象'] ? [p['適合對象']] : []),
+        '適合對象'
+    );
+    fields['適合對象'] = {
+        label: '適合對象',
+        isList: true,
+        word: `${(w['適合對象'] || []).length} 個項目`,
+        pdf: `${(p['適合對象'] || []).length} 個項目`,
+        wordItems: Array.isArray(w['適合對象']) ? w['適合對象'] : [],
+        pdfItems: Array.isArray(p['適合對象']) ? p['適合對象'] : [],
+        status: targetDiff.status,
+        desc: targetDiff.desc,
+        details: targetDiff.details
+    };
+    if (targetDiff.status === 'red') hasRed = true;
+    if (targetDiff.status === 'yellow') hasYellow = true;
+
+    // 11. 預備知識 (List[str] 陣列比對與水平對齊)
+    const prereqDiff = alignListItems(
+        Array.isArray(w['預備知識']) ? w['預備知識'] : (w['預備知識'] ? [w['預備知識']] : []),
+        Array.isArray(p['預備知識']) ? p['預備知識'] : (p['預備知識'] ? [p['預備知識']] : []),
+        '預備知識'
+    );
+    fields['預備知識'] = {
+        label: '預備知識',
+        isList: true,
+        word: `${(w['預備知識'] || []).length} 個項目`,
+        pdf: `${(p['預備知識'] || []).length} 個項目`,
+        wordItems: Array.isArray(w['預備知識']) ? w['預備知識'] : [],
+        pdfItems: Array.isArray(p['預備知識']) ? p['預備知識'] : [],
+        status: prereqDiff.status,
+        desc: prereqDiff.desc,
+        details: prereqDiff.details
+    };
+    if (prereqDiff.status === 'red') hasRed = true;
+    if (prereqDiff.status === 'yellow') hasYellow = true;
+
+    // 12. 先修課程 (if present in Word or PDF)
+    if ((w['先修課程'] && w['先修課程'].length > 0) || (p['先修課程'] && p['先修課程'].length > 0)) {
+        const preDiff = alignListItems(
+            Array.isArray(w['先修課程']) ? w['先修課程'] : (w['先修課程'] ? [w['先修課程']] : []),
+            Array.isArray(p['先修課程']) ? p['先修課程'] : (p['先修課程'] ? [p['先修課程']] : []),
+            '先修課程'
+        );
+        fields['先修課程'] = {
+            label: '先修課程',
+            isList: true,
+            word: `${(w['先修課程'] || []).length} 個項目`,
+            pdf: `${(p['先修課程'] || []).length} 個項目`,
+            wordItems: Array.isArray(w['先修課程']) ? w['先修課程'] : [],
+            pdfItems: Array.isArray(p['先修課程']) ? p['先修課程'] : [],
+            status: preDiff.status,
+            desc: preDiff.desc,
+            details: preDiff.details
+        };
+        if (preDiff.status === 'red') hasRed = true;
+        if (preDiff.status === 'yellow') hasYellow = true;
     }
 
     // 13. 課程目標 (Rule 3: 特殊校對容錯規則：PDF 缺失視為正常，顯示 ⚪/🟡 略過，嚴禁亮紅燈！)
@@ -1524,71 +2003,106 @@ function createCourseCard(item, idx) {
             dotStyle = 'gray';
         }
 
-        // 課程內容 accordion button
-        let contentExpandBtn = '';
-        if (key === '課程內容' && field.details && field.details.length > 0) {
-            contentExpandBtn = `
-                <button onclick="toggleContentDetails(${idx})" class="mt-1.5 text-xs text-blue-600 hover:text-blue-800 font-semibold inline-flex items-center cursor-pointer transition">
-                    <span>展開課程內容逐條對照</span>
-                    <svg class="w-3.5 h-3.5 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
-                </button>
+        if (field.isList && field.details && field.details.length > 0) {
+            let itemsHtml = '';
+            field.details.forEach(d => {
+                let pBorder = 'border-slate-200';
+                let pBg = 'bg-white';
+                let pTextColor = 'text-slate-800';
+                let pBadgeBg = 'bg-slate-100 text-slate-600';
+
+                if (d.status === 'green') {
+                    pBorder = 'border-emerald-200';
+                    pBg = 'bg-emerald-50/40';
+                    pTextColor = 'text-emerald-950';
+                    pBadgeBg = 'bg-emerald-100 text-emerald-800';
+                } else if (d.status === 'yellow') {
+                    pBorder = 'border-amber-200';
+                    pBg = 'bg-amber-50/50';
+                    pTextColor = 'text-amber-950';
+                    pBadgeBg = 'bg-amber-100 text-amber-800';
+                } else if (d.status === 'red') {
+                    pBorder = 'border-red-300';
+                    pBg = 'bg-red-50/70';
+                    pTextColor = 'text-red-950 font-semibold';
+                    pBadgeBg = 'bg-red-100 text-red-800 font-bold';
+                } else if (d.status === 'gray') {
+                    pBorder = 'border-slate-200';
+                    pBg = 'bg-slate-50';
+                    pTextColor = 'text-slate-400 italic';
+                    pBadgeBg = 'bg-slate-100 text-slate-500';
+                }
+
+                itemsHtml += `
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
+                        <!-- Word Item Box -->
+                        <div class="p-2.5 rounded-lg border border-slate-200 bg-white flex items-start space-x-2 text-xs text-slate-800 leading-relaxed whitespace-pre-line break-words shadow-2xs">
+                            <span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-3xs font-mono font-bold bg-slate-100 text-slate-600 shrink-0 mt-0.5">
+                                ${d.index}
+                            </span>
+                            <div class="flex-1 min-w-0">
+                                ${d.word ? d.word : '<span class="text-slate-400 italic">(Word 無此項)</span>'}
+                            </div>
+                        </div>
+
+                        <!-- PDF Item Box -->
+                        <div class="p-2.5 rounded-lg border ${pBorder} ${pBg} flex items-start space-x-2 text-xs ${pTextColor} leading-relaxed whitespace-pre-line break-words shadow-2xs">
+                            <span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-3xs font-mono font-bold ${pBadgeBg} shrink-0 mt-0.5">
+                                ${d.index}
+                            </span>
+                            <div class="flex-1 min-w-0">
+                                ${d.pdf ? d.pdf : '<span class="font-bold text-red-600">❌ (PDF 漏排此項)</span>'}
+                                ${d.desc && d.status === 'red' && d.pdf ? `<div class="mt-1 text-3xs text-red-600 font-normal">[${d.desc}]</div>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            const scrollContainerClass = field.details.length > 8 ? 'max-h-[480px] overflow-y-auto pr-1' : '';
+
+            rowsHtml += `
+                <tr class="border-b border-slate-100 last:border-none ${rowBg}">
+                    <td class="py-3 px-4 text-xs font-semibold text-slate-700 whitespace-nowrap align-top">
+                        <div class="font-bold text-slate-800">${field.label}</div>
+                        <span class="mt-1 inline-block text-3xs px-2 py-0.5 rounded font-mono bg-slate-100 text-slate-500 font-normal">
+                            共 ${field.details.length} 項
+                        </span>
+                    </td>
+                    <td colspan="2" class="py-2.5 px-4 align-top">
+                        <div class="space-y-2 ${scrollContainerClass}">
+                            ${itemsHtml}
+                        </div>
+                    </td>
+                    <td class="py-3 px-4 text-xs align-top">
+                        <span class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium ${badgeStyle}">
+                            <span class="light-dot ${dotStyle} mr-1.5"></span>
+                            ${field.desc}
+                        </span>
+                    </td>
+                </tr>
+            `;
+        } else {
+            rowsHtml += `
+                <tr class="border-b border-slate-100 last:border-none ${rowBg}">
+                    <td class="py-3 px-4 text-xs font-semibold text-slate-700 whitespace-nowrap align-top">
+                        ${field.label}
+                    </td>
+                    <td class="py-3 px-4 text-xs text-slate-800 font-mono align-top break-words whitespace-pre-line leading-relaxed">
+                        ${formatFieldValue(key, field.word, field.status === 'red')}
+                    </td>
+                    <td class="py-3 px-4 text-xs text-slate-800 font-mono align-top break-words whitespace-pre-line leading-relaxed">
+                        ${formatFieldValue(key, field.pdf, field.status === 'red')}
+                    </td>
+                    <td class="py-3 px-4 text-xs align-top">
+                        <span class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium ${badgeStyle}">
+                            <span class="light-dot ${dotStyle} mr-1.5"></span>
+                            ${field.desc}
+                        </span>
+                    </td>
+                </tr>
             `;
         }
-
-        rowsHtml += `
-            <tr class="border-b border-slate-100 last:border-none ${rowBg}">
-                <td class="py-3 px-4 text-xs font-semibold text-slate-700 whitespace-nowrap align-top">
-                    ${field.label}
-                </td>
-                <td class="py-3 px-4 text-xs text-slate-800 font-mono align-top break-words">
-                    ${formatFieldValue(key, field.word, field.status === 'red')}
-                </td>
-                <td class="py-3 px-4 text-xs text-slate-800 font-mono align-top break-words">
-                    ${formatFieldValue(key, field.pdf, field.status === 'red')}
-                </td>
-                <td class="py-3 px-4 text-xs align-top">
-                    <span class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium ${badgeStyle}">
-                        <span class="light-dot ${dotStyle} mr-1.5"></span>
-                        ${field.desc}
-                    </span>
-                    ${contentExpandBtn}
-                </td>
-            </tr>
-        `;
-    }
-
-    // 課程內容 expandable accordion
-    let contentAccordionHtml = '';
-    if (item.fields['課程內容'] && item.fields['課程內容'].details && item.fields['課程內容'].details.length > 0) {
-        let itemsHtml = '';
-        item.fields['課程內容'].details.forEach(d => {
-            const dColor = d.status === 'red' ? 'text-red-600 font-semibold' : d.status === 'yellow' ? 'text-amber-700' : 'text-slate-700';
-            itemsHtml += `
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 py-2 border-b border-slate-100 text-xs last:border-none">
-                    <div class="bg-white p-2.5 rounded border border-slate-200">
-                        <span class="text-xs text-slate-400 font-mono mr-1">#${d.index} Word:</span>
-                        <span class="text-slate-800">${d.word || '(無)'}</span>
-                    </div>
-                    <div class="bg-white p-2.5 rounded border ${d.status === 'red' ? 'border-red-300 bg-red-50/30' : 'border-slate-200'}">
-                        <span class="text-xs text-slate-400 font-mono mr-1">#${d.index} PDF:</span>
-                        <span class="${dColor}">${d.pdf || '(漏排)'}</span>
-                        ${d.status === 'red' ? `<span class="ml-2 text-2xs px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-bold">項目內容不符或遺漏</span>` : ''}
-                    </div>
-                </div>
-            `;
-        });
-
-        contentAccordionHtml = `
-            <div id="contentDetails-${idx}" class="hidden p-4 bg-slate-50 border-t border-slate-200">
-                <h5 class="text-xs font-bold text-slate-700 mb-2 flex items-center">
-                    <svg class="w-4 h-4 mr-1 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
-                    課程內容逐條對照清單 (Word vs PDF)
-                </h5>
-                <div class="space-y-1">
-                    ${itemsHtml}
-                </div>
-            </div>
-        `;
     }
 
     // Prepare badges for 中文課名 and 英文課名
@@ -1690,8 +2204,6 @@ function createCourseCard(item, idx) {
                 </tbody>
             </table>
         </div>
-
-        ${contentAccordionHtml}
     `;
 
     return card;
@@ -1704,13 +2216,6 @@ function formatFieldValue(field, val, isError) {
     }
     return val;
 }
-
-window.toggleContentDetails = function(idx) {
-    const el = document.getElementById(`contentDetails-${idx}`);
-    if (el) {
-        el.classList.toggle('hidden');
-    }
-};
 
 // ==========================================
 // Reporting & Export
@@ -1740,7 +2245,15 @@ function copyErrorReport() {
                 if (f.status === 'red') {
                     if (key === '課程名稱' && item.fields['中文課名']) continue;
                     if (key === '英文名稱' && item.fields['英文課名']) continue;
-                    report += `   - ${f.label}：Word 原稿寫「${f.word}」，但 PDF 排版為「${f.pdf}」 ➔ ${f.desc}\n`;
+                    if (f.isList && f.details) {
+                        report += `   - ${f.label}：${f.desc}\n`;
+                        const errDetails = f.details.filter(d => d.status === 'red');
+                        errDetails.forEach(d => {
+                            report += `     • [第 ${d.index} 項] Word「${d.word || '無'}」⇄ PDF「${d.pdf || '漏排'}」➔ ${d.desc}\n`;
+                        });
+                    } else {
+                        report += `   - ${f.label}：Word 原稿寫「${f.word}」，但 PDF 排版為「${f.pdf}」 ➔ ${f.desc}\n`;
+                    }
                 }
             }
         });
@@ -1796,6 +2309,9 @@ function exportCSVReport() {
         '課程內容比對',
         '備註事項比對',
         '後續推薦課程比對',
+        '適合對象比對',
+        '預備知識比對',
+        '先修課程比對',
         '課程目標比對',
         '學會技能比對',
         'PDF頁碼',
@@ -1836,6 +2352,9 @@ function exportCSVReport() {
             fields['課程內容'] ? fields['課程內容'].desc : '',
             fields['備註事項'] ? fields['備註事項'].desc : '',
             fields['後續推薦課程'] ? fields['後續推薦課程'].desc : '',
+            fields['適合對象'] ? fields['適合對象'].desc : '',
+            fields['預備知識'] ? fields['預備知識'].desc : '',
+            fields['先修課程'] ? fields['先修課程'].desc : '',
             fields['課程目標'] ? fields['課程目標'].desc : '',
             fields['學會技能'] ? fields['學會技能'].desc : '',
             c.pdfCourse && c.pdfCourse.page ? c.pdfCourse.page : '',
