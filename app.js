@@ -341,9 +341,12 @@ function extractCourseIdentityFromWord(rows, course) {
 /**
  * Extracts CourseIdentity (course_code, course_name_zh, course_name_en) from PDF header items.
  * Strictly recognizes English subtitles positioned below Chinese titles, ensuring no omission.
+ * Filters out breadcrumbs / category tabs (e.g. "CompTIA SecAI+ 認證", "此課程為...證照") located above the title banner.
  */
 function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
-    const maxHeaderY = Math.min(courseTop, metaY + 50);
+    // 1. In promotional flyers, the course title banner is strictly located within metaY + 5 to metaY + 46.
+    // Breadcrumbs (y >= metaY + 48) and page headers (y > metaY + 60) reside above.
+    const maxHeaderY = Math.min(courseTop, metaY + 46);
     const validItems = headerItems.filter(it => it.y > metaY + 5 && it.y <= maxHeaderY);
 
     let code = '';
@@ -365,7 +368,10 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
     }
     if (curLine.length) lines.push(curLine);
 
+    const candidateLines = [];
     for (const line of lines) {
+        const lineMaxH = Math.max(...line.map(it => it.h || 0));
+
         // 1. Identify left-side course code badge (x < 95)
         const leftBadge = line.find(it => it.x < 95 && /^[A-Za-z0-9_-]{2,10}$/.test(it.str));
         if (leftBadge && !code) {
@@ -376,7 +382,16 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         if (contentItems.length === 0) continue;
 
         const lineText = contentItems.map(it => it.str).join(' ').trim();
-        if (lineText.includes('課程簡介') || lineText.includes('各地開課時間') || lineText.match(/^\|\s*.*\s*\|$/) || lineText === '區塊鏈' || lineText === '鑒真數位') {
+        if (lineText.includes('課程簡介') || 
+            lineText.includes('各地開課時間') || 
+            lineText.includes('後續推薦課程') ||
+            lineText.match(/^\|\s*.*\s*\|$/) || 
+            lineText === '區塊鏈' || 
+            lineText === '鑒真數位' ||
+            lineText.includes('認可之資通安全專業證照') ||
+            // Breadcrumbs like "CompTIA SecAI+ 認證" with small font (h <= 10)
+            ((lineText.endsWith('認證') || lineText.endsWith('證照')) && lineMaxH <= 10)
+        ) {
             continue;
         }
 
@@ -386,10 +401,26 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
             continue;
         }
 
-        if (/[\u4e00-\u9fa5]/.test(lineText)) {
-            zhLines.push(lineText);
-        } else if (/^[A-Za-z0-9\s,&.:()/'"+\u00a0–—-]{3,}$/.test(lineText)) {
-            enLines.push(lineText);
+        candidateLines.push({ line, contentItems, lineText, lineMaxH, y: line[0].y });
+    }
+
+    // Identify Chinese title lines by font hierarchy (title has largest font in banner)
+    const zhCandidates = candidateLines.filter(l => /[\u4e00-\u9fa5]/.test(l.lineText));
+    if (zhCandidates.length > 0) {
+        const maxZhH = Math.max(...zhCandidates.map(l => l.lineMaxH));
+        for (const l of zhCandidates) {
+            // Only include lines matching the dominant title font size (filter out small font tags)
+            if (maxZhH >= 12 && l.lineMaxH < maxZhH - 3) {
+                continue;
+            }
+            zhLines.push(l.lineText);
+        }
+    }
+
+    // English subtitle lines (must not contain Chinese characters)
+    for (const l of candidateLines) {
+        if (!/[\u4e00-\u9fa5]/.test(l.lineText) && /^[A-Za-z0-9\s,&.:()/'"+\u00a0–—-]{3,}$/.test(l.lineText)) {
+            enLines.push(l.lineText);
         }
     }
 
@@ -2381,7 +2412,7 @@ function normalizeText(str) {
     if (!str) return '';
     return str
         .replace(/[\s\r\n\t\u3000]+/g, '')
-        .replace(/[，,。.:：;；()（）「」『』"'-]/g, '')
+        .replace(/[，,。.:：;；()（）「」『』"'\-／/＋+\\]/g, '')
         .toLowerCase();
 }
 
