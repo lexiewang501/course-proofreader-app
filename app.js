@@ -359,10 +359,29 @@ function extractCourseIdentityFromWord(rows, course) {
  * Filters out breadcrumbs / category tabs (e.g. "CompTIA SecAI+ 認證", "此課程為...證照") located above the title banner.
  */
 function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
-    // 1. In promotional flyers, the course title banner is strictly located within metaY + 5 to metaY + 46.
+    // 1. In promotional flyers, the course title banner is strictly located within metaY + 4 to metaY + 46.
     // Breadcrumbs (y >= metaY + 48) and page headers (y > metaY + 60) reside above.
     const maxHeaderY = Math.min(courseTop, metaY + 46);
-    const validItems = headerItems.filter(it => it.y > metaY + 5 && it.y <= maxHeaderY);
+    let validItems = headerItems.filter(it => (it.x < 95 ? it.y >= metaY - 5 : it.y > metaY + 3) && it.y <= maxHeaderY);
+
+    // Merge superscript symbols (® / ™ / ©) into the preceding word/acronym
+    const supers = validItems.filter(it => /^[®™©]$/.test(it.str));
+    if (supers.length > 0) {
+        const remainingItems = [];
+        for (const it of validItems) {
+            if (/^[®™©]$/.test(it.str)) continue;
+            const sup = supers.find(s => s.x >= it.x && (s.x - it.x) <= 45 && s.y >= it.y && (s.y - it.y) <= 15);
+            if (sup) {
+                remainingItems.push({
+                    ...it,
+                    str: it.str + sup.str
+                });
+            } else {
+                remainingItems.push(it);
+            }
+        }
+        validItems = remainingItems;
+    }
 
     let code = '';
     const zhLines = [];
@@ -434,7 +453,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
 
     // English subtitle lines (must not contain Chinese characters)
     for (const l of candidateLines) {
-        if (!/[\u4e00-\u9fa5]/.test(l.lineText) && /^[A-Za-z0-9\s,&.:()/'"+\u00a0–—-]{3,}$/.test(l.lineText)) {
+        if (!/[\u4e00-\u9fa5]/.test(l.lineText) && /^[A-Za-z0-9\s,&.:()/'"+\u00a0–—®™©-]{3,}$/.test(l.lineText)) {
             enLines.push(l.lineText);
         }
     }
@@ -827,10 +846,25 @@ async function parsePdf(buffer) {
             if (pointsMatch) course['點數'] = pointsMatch[1];
 
             const matMatch = metaLineText.match(/教材[：:\s]*([^｜|\n]+)/);
-            if (matMatch) course['教材'] = matMatch[1].trim();
+            if (matMatch) {
+                let matVal = matMatch[1].trim();
+                let firstSectionTop = metaY - 30;
+                if (courseSections.length > 0) {
+                    firstSectionTop = courseSections[0].top;
+                }
+                const wrappedItems = items.filter(it => it.y < metaY - 3 && it.y >= firstSectionTop && it.x >= 280 && it.x <= 550);
+                if (wrappedItems.length > 0) {
+                    wrappedItems.sort((a, b) => b.y - a.y || a.x - b.x);
+                    const extraMat = wrappedItems.map(it => it.str).join(' ').trim();
+                    if (extraMat) {
+                        matVal = (matVal + (extraMat.startsWith('+') ? ' ' : ' ') + extraMat).trim();
+                    }
+                }
+                course['教材'] = matVal;
+            }
 
             // Extract CourseIdentity from PDF header items (嚴格擷取英文原廠副標題與代碼，嚴禁忽略英文副標)
-            const headerItems = items.filter(it => it.y > metaY + 5 && it.y <= courseTop);
+            const headerItems = items.filter(it => (it.x < 95 ? it.y >= metaY - 5 : it.y > metaY + 3) && it.y <= courseTop);
             const identity = extractCourseIdentityFromPdf(headerItems, metaY, courseTop);
 
             course.course_code = identity.course_code;
@@ -863,7 +897,7 @@ async function parsePdf(buffer) {
                     const lines = groupItemsIntoVisualLines(secItems);
                     const lineTexts = lines.map(l => l.text);
                     if (hasBulletMarkers(lineTexts)) {
-                        course[sec.label] = assembleLinesIntoItems(lines, false);
+                        course[sec.label] = extractListFromPdfSection(secItems, false);
                     } else {
                         course[sec.label] = lineTexts.join('\n');
                     }
@@ -2947,7 +2981,7 @@ function normalizeText(str) {
     if (!str) return '';
     return str
         .replace(/[\s\r\n\t\u3000]+/g, '')
-        .replace(/[，,。.:：;；()（）「」『』"'\-／/＋+\\]/g, '')
+        .replace(/[，,。.:：;；()（）「」『』"'\-／/＋+\\®™©]/g, '')
         .toLowerCase();
 }
 
