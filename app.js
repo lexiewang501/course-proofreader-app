@@ -633,7 +633,7 @@ async function parsePdf(buffer) {
             x: Math.round(it.transform[4]),
             y: Math.round(it.transform[5]),
             str: it.str.trim()
-        })).filter(it => it.str.length > 0);
+        })).filter(it => it.str.length > 0 && it.x < 565);
 
         // 1. Extract vector rectangles to determine exact table cell bounds
         const opList = await page.getOperatorList();
@@ -777,8 +777,8 @@ async function parsePdf(buffer) {
                 page: p
             };
 
-            // Metadata Line items
-            const metaLineItems = items.filter(it => it.y >= metaY - 5 && it.y <= metaY + 5);
+            // Metadata Line items (strictly on the metadata row baseline, within content card bounds)
+            const metaLineItems = items.filter(it => Math.abs(it.y - metaY) <= 3 && it.x >= 80 && it.x <= 550);
             metaLineItems.sort((a, b) => a.x - b.x);
             const metaLineText = metaLineItems.map(it => it.str).join(' ');
 
