@@ -592,7 +592,15 @@ async function parseDocx(buffer) {
             // Check known section labels
             for (const label of KNOWN_LABELS) {
                 if (firstCellText === label || firstCellText.startsWith(label)) {
-                    if (LIST_FIELDS.has(label)) {
+                    if (label === '適合對象' || label === '預備知識' || label === '先修課程') {
+                        const cellParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
+                        const cellFull = row.slice(1).map(c => c.fullText).join(' ').trim();
+                        if (hasBulletMarkers(cellParas) || hasBulletMarkers(cellFull)) {
+                            course[label] = extractListItems(cellParas, cellFull);
+                        } else {
+                            course[label] = cellParas.length > 0 ? cellParas.join('\n') : cellFull;
+                        }
+                    } else if (label === '課程內容' || label === '備註事項') {
                         const cellParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
                         const cellFull = row.slice(1).map(c => c.fullText).join(' ').trim();
                         course[label] = extractListItems(cellParas, cellFull);
@@ -603,8 +611,7 @@ async function parseDocx(buffer) {
                     } else if (label === '課程目標') {
                         const cellParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
                         const cellFull = row.slice(1).map(c => c.fullText).join(' ').trim();
-                        course['課程目標'] = cellFull;
-                        course['課程目標_items'] = cellParas.length > 0 ? cellParas : splitOutlineItems(cellFull);
+                        course['課程目標'] = cellParas.length > 0 ? cellParas.join('\n') : cellFull;
                     } else {
                         const val = row.slice(1).map(c => c.fullText).join(' ').trim();
                         course[label] = val;
@@ -613,13 +620,18 @@ async function parseDocx(buffer) {
                     const isAlreadyPopulated = Array.isArray(course[label]) ? course[label].length > 0 : Boolean(course[label]);
                     if (!isAlreadyPopulated) {
                         const val = rowFullText.replace(new RegExp(`^${label}[：:\\s]*`), '').trim();
-                        if (LIST_FIELDS.has(label)) {
+                        if (label === '適合對象' || label === '預備知識' || label === '先修課程') {
+                            if (hasBulletMarkers(val)) {
+                                course[label] = extractListItems([], val);
+                            } else {
+                                course[label] = val;
+                            }
+                        } else if (label === '課程內容' || label === '備註事項') {
                             course[label] = extractListItems([], val);
                         } else if (label === '後續推薦課程') {
                             course['後續推薦課程'] = splitRecommendedCourses(val);
                         } else if (label === '課程目標') {
                             course['課程目標'] = val;
-                            course['課程目標_items'] = splitOutlineItems(val);
                         } else {
                             course[label] = val;
                         }
@@ -837,15 +849,24 @@ async function parsePdf(buffer) {
                 const secItems = items.filter(it => it.x >= 88 && it.y > sec.effectiveBottom && it.y <= sec.effectiveTop);
                 secItems.sort((a, b) => b.y - a.y || a.x - b.x);
 
-                if (LIST_FIELDS.has(sec.label)) {
-                    course[sec.label] = extractListFromPdfSection(secItems, sec.label === '備註事項');
+                if (sec.label === '課程內容') {
+                    course['課程內容'] = extractListFromPdfSection(secItems, false);
+                } else if (sec.label === '備註事項') {
+                    course['備註事項'] = extractNotesFromPdfSection(secItems);
                 } else if (sec.label === '後續推薦課程') {
                     const fullText = secItems.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
                     course['後續推薦課程'] = splitRecommendedCourses(fullText);
                 } else if (sec.label === '課程目標') {
-                    const text = secItems.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
-                    course['課程目標'] = text;
-                    course['課程目標_items'] = extractListFromPdfSection(secItems, false);
+                    const lines = groupItemsIntoVisualLines(secItems);
+                    course['課程目標'] = lines.map(l => l.text).join('\n');
+                } else if (sec.label === '適合對象' || sec.label === '預備知識' || sec.label === '先修課程') {
+                    const lines = groupItemsIntoVisualLines(secItems);
+                    const lineTexts = lines.map(l => l.text);
+                    if (hasBulletMarkers(lineTexts)) {
+                        course[sec.label] = assembleLinesIntoItems(lines, false);
+                    } else {
+                        course[sec.label] = lineTexts.join('\n');
+                    }
                 } else {
                     // Strictly isolate 學會技能, etc.
                     const text = secItems.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
@@ -909,14 +930,93 @@ function extractListItems(paragraphs, fullText) {
 }
 
 /**
+ * Detects whether a string or array of strings contains explicit list bullet or numbering markers.
+ */
+function hasBulletMarkers(val) {
+    if (!val) return false;
+    const arr = Array.isArray(val) ? val : [val];
+    const bulletPattern = /^\s*(?:\d+[、]|(?:\d+)\.(?!\d)\s*|\(\d+\)|\[\d+\]|[①-⑩]|[•●※\-\*·◆▪]|(?:Lesson|Module|Chapter)\s*\d+)/i;
+    return arr.some(s => bulletPattern.test((s || '').trim()));
+}
+
+/**
+ * Checks whether a text line indicates the start of a discrete note item.
+ * Strictly avoids splitting on decimal numbers (e.g. 1.5小時).
+ * If current item is already a numbered item (e.g. 1., 2.), ordinary continuation lines are never split.
+ */
+function isNotesItemStart(text, currentItem) {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+
+    // 1. Explicit numbering (e.g. 1. 2. 1、 (1) [1]) - NEVER match decimals like 1.5!
+    if (/^(?:\d+[、]|\d+\.(?!\d)\s*|\(\d+\)|\[\d+\]|[①-⑩])/.test(trimmed)) return true;
+
+    // 2. Explicit bullet symbol (e.g. ● • ※ - * ·)
+    if (/^[•●※\-\*·◆▪]/.test(trimmed)) return true;
+
+    // 3. Scheme / discount / note headers ending in colon
+    if (/^(?:課程優惠方案|限時優惠|早鳥優惠|早鳥優惠價|續報優惠|學生優惠|學生專屬優惠|重聽服務|原廠優惠|證照優惠|方案\s*\d*)[：:]/.test(trimmed)) return true;
+    if (/^[^：:\n]{2,8}[：:]\s*(?:即日起|開課前|報名|原報名|續報|凡報名|參與|可享|贈送|提供|投入|完成|透過)/.test(trimmed)) return true;
+
+    // If current item already started with an explicit number (e.g. "1.", "2."),
+    // do NOT split on regular text lines! Only split on a new number or bullet!
+    if (currentItem && /^\s*(?:\d+[、]|\d+\.(?!\d)|\(\d+\)|\[\d+\])/.test(currentItem.trim())) {
+        return false;
+    }
+
+    // 4. In unnumbered notes, recognize independent topic starts
+    if (/^(?:白天班|晚上班|週末班|假日班|上課時間|報名本課程|課程結束後|贈送\d+|免費提供|本課程與|出席率達|原報名班級|沉浸式體驗|實務應用|技能追蹤|完整練習時數)/.test(trimmed)) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Assembles visual lines in notes into discrete items, preserving multi-line continuations.
+ */
+function assembleNotesLines(lines) {
+    if (!lines || lines.length === 0) return [];
+    const items = [];
+    let curItem = '';
+
+    for (let i = 0; i < lines.length; i++) {
+        const lineText = lines[i].text.trim();
+        if (!lineText) continue;
+
+        if (!curItem) {
+            curItem = lineText;
+        } else {
+            if (isNotesItemStart(lineText, curItem)) {
+                items.push(curItem);
+                curItem = lineText;
+            } else {
+                curItem += (/[a-zA-Z0-9]$/.test(curItem) && /^[a-zA-Z0-9]/.test(lineText) ? ' ' : '') + lineText;
+            }
+        }
+    }
+    if (curItem) items.push(curItem);
+    return items.map(it => it.replace(/\s+/g, ' ').trim()).filter(Boolean);
+}
+
+/**
+ * Extracts note items from PDF section in single-column layout with robust line assembly.
+ */
+function extractNotesFromPdfSection(secItems) {
+    if (!secItems || secItems.length === 0) return [];
+    const lines = groupItemsIntoVisualLines(secItems);
+    return assembleNotesLines(lines);
+}
+
+/**
  * Dynamically detects column boundaries (X coordinates) in a section.
  * Returns array of split X coordinates (empty array for single column).
  */
 function getColumnSplits(secItems) {
     if (!secItems || secItems.length === 0) return [];
     const bullets = secItems.filter(it => 
-        /^\d+[.、]/.test(it.str) || 
-        /^[•●※]/.test(it.str) ||
+        /^(?:\d+[、]|\d+\.(?!\d)\s*|\(\d+\)|\[\d+\]|[①-⑩])/.test(it.str) || 
+        /^[•●※\-\*·◆▪]/.test(it.str) ||
         /^Lesson\s*\d+/i.test(it.str)
     );
 
@@ -1184,9 +1284,9 @@ function analyzeItemHierarchy(itemText, prevH, fieldLabel) {
         };
     }
 
-    // 2. Explicit numbered items (1., 2., 3., 1、, 2、, etc.)
+    // 2. Explicit numbered items (1., 2., 3., 1、, 2、, etc.) - NEVER match decimals like 1.5!
     const nMatch = raw.match(/^(\d+)[.、]\s*(.*)$/);
-    if (nMatch) {
+    if (nMatch && !/^\d+\.\d/.test(raw)) {
         return {
             level: 1,
             type: 'number',
@@ -1224,7 +1324,7 @@ function analyzeItemHierarchy(itemText, prevH, fieldLabel) {
     return {
         level: 1,
         type: 'text',
-        badgeText: '•',
+        badgeText: '',
         indent: '',
         cleanText: raw
     };
@@ -1307,11 +1407,6 @@ function alignListItems(wItems, pItems, fieldLabel) {
 
         if (h.type === 'number') {
             currentMainNum = parseInt(h.badgeText, 10);
-        } else if (h.type === 'text' && !/^[●•※\-\*·]/.test(sampleText)) {
-            currentMainNum++;
-            if (!h.badgeText || h.badgeText === '•') {
-                h.badgeText = String(currentMainNum);
-            }
         }
         if (h.level >= 2) subCount++;
         else mainCount++;
@@ -1960,129 +2055,158 @@ function compareSinglePair(w, p) {
         };
     }
 
-    // 10. 適合對象 (List[str] 陣列比對與水平對齊)
-    const targetDiff = alignListItems(
-        Array.isArray(w['適合對象']) ? w['適合對象'] : (w['適合對象'] ? [w['適合對象']] : []),
-        Array.isArray(p['適合對象']) ? p['適合對象'] : (p['適合對象'] ? [p['適合對象']] : []),
-        '適合對象'
-    );
-    fields['適合對象'] = {
-        label: '適合對象',
-        isList: true,
-        word: `${(w['適合對象'] || []).length} 個項目`,
-        pdf: `${(p['適合對象'] || []).length} 個項目`,
-        wordItems: Array.isArray(w['適合對象']) ? w['適合對象'] : [],
-        pdfItems: Array.isArray(p['適合對象']) ? p['適合對象'] : [],
-        status: targetDiff.status,
-        desc: targetDiff.desc,
-        details: targetDiff.details
-    };
-    if (targetDiff.status === 'red') hasRed = true;
-    if (targetDiff.status === 'yellow') hasYellow = true;
+    // 10. 適合對象 (動態判定 List vs 純文字段落)
+    const wTargetVal = w['適合對象'] || '';
+    const pTargetVal = p['適合對象'] || '';
+    const targetIsList = hasBulletMarkers(wTargetVal) || hasBulletMarkers(pTargetVal);
 
-    // 11. 預備知識 (List[str] 陣列比對與水平對齊)
-    const prereqDiff = alignListItems(
-        Array.isArray(w['預備知識']) ? w['預備知識'] : (w['預備知識'] ? [w['預備知識']] : []),
-        Array.isArray(p['預備知識']) ? p['預備知識'] : (p['預備知識'] ? [p['預備知識']] : []),
-        '預備知識'
-    );
-    fields['預備知識'] = {
-        label: '預備知識',
-        isList: true,
-        word: `${(w['預備知識'] || []).length} 個項目`,
-        pdf: `${(p['預備知識'] || []).length} 個項目`,
-        wordItems: Array.isArray(w['預備知識']) ? w['預備知識'] : [],
-        pdfItems: Array.isArray(p['預備知識']) ? p['預備知識'] : [],
-        status: prereqDiff.status,
-        desc: prereqDiff.desc,
-        details: prereqDiff.details
-    };
-    if (prereqDiff.status === 'red') hasRed = true;
-    if (prereqDiff.status === 'yellow') hasYellow = true;
+    if (targetIsList) {
+        const wTargetArr = Array.isArray(wTargetVal) ? wTargetVal : [wTargetVal];
+        const pTargetArr = Array.isArray(pTargetVal) ? pTargetVal : [pTargetVal];
+        const targetDiff = alignListItems(wTargetArr, pTargetArr, '適合對象');
+        fields['適合對象'] = {
+            label: '適合對象',
+            isList: true,
+            word: `${wTargetArr.length} 個項目`,
+            pdf: `${pTargetArr.length} 個項目`,
+            wordItems: wTargetArr,
+            pdfItems: pTargetArr,
+            status: targetDiff.status,
+            desc: targetDiff.desc,
+            details: targetDiff.details
+        };
+        if (targetDiff.status === 'red') hasRed = true;
+        if (targetDiff.status === 'yellow') hasYellow = true;
+    } else {
+        const wTargetStr = Array.isArray(wTargetVal) ? wTargetVal.join('\n') : String(wTargetVal || '');
+        const pTargetStr = Array.isArray(pTargetVal) ? pTargetVal.join('\n') : String(pTargetVal || '');
+        const wTNorm = normalizeText(wTargetStr);
+        const pTNorm = normalizeText(pTargetStr);
+        if (!wTNorm && !pTNorm) {
+            fields['適合對象'] = { label: '適合對象', word: '(無)', pdf: '(無)', status: 'green', desc: '雙方皆無適合對象' };
+        } else if (wTNorm === pTNorm) {
+            fields['適合對象'] = { label: '適合對象', word: wTargetStr, pdf: pTargetStr, status: 'green', desc: '適合對象相符' };
+        } else if (calculateSimilarity(wTNorm, pTNorm) > 0.70 || wTNorm.includes(pTNorm) || pTNorm.includes(wTNorm)) {
+            fields['適合對象'] = { label: '適合對象', word: wTargetStr, pdf: pTargetStr, status: 'yellow', desc: '適合對象文字微差' };
+            hasYellow = true;
+        } else {
+            fields['適合對象'] = { label: '適合對象', word: wTargetStr || '(無)', pdf: pTargetStr || '(漏排)', status: 'red', desc: '適合對象不一致！' };
+            hasRed = true;
+        }
+    }
+
+    // 11. 預備知識 (動態判定 List vs 純文字段落)
+    const wPrereqVal = w['預備知識'] || '';
+    const pPrereqVal = p['預備知識'] || '';
+    const prereqIsList = hasBulletMarkers(wPrereqVal) || hasBulletMarkers(pPrereqVal);
+
+    if (prereqIsList) {
+        const wPrereqArr = Array.isArray(wPrereqVal) ? wPrereqVal : [wPrereqVal];
+        const pPrereqArr = Array.isArray(pPrereqVal) ? pPrereqVal : [pPrereqVal];
+        const prereqDiff = alignListItems(wPrereqArr, pPrereqArr, '預備知識');
+        fields['預備知識'] = {
+            label: '預備知識',
+            isList: true,
+            word: `${wPrereqArr.length} 個項目`,
+            pdf: `${pPrereqArr.length} 個項目`,
+            wordItems: wPrereqArr,
+            pdfItems: pPrereqArr,
+            status: prereqDiff.status,
+            desc: prereqDiff.desc,
+            details: prereqDiff.details
+        };
+        if (prereqDiff.status === 'red') hasRed = true;
+        if (prereqDiff.status === 'yellow') hasYellow = true;
+    } else {
+        const wPrereqStr = Array.isArray(wPrereqVal) ? wPrereqVal.join('\n') : String(wPrereqVal || '');
+        const pPrereqStr = Array.isArray(pPrereqVal) ? pPrereqVal.join('\n') : String(pPrereqVal || '');
+        const wPNorm = normalizeText(wPrereqStr);
+        const pPNorm = normalizeText(pPrereqStr);
+        if (!wPNorm && !pPNorm) {
+            fields['預備知識'] = { label: '預備知識', word: '(無)', pdf: '(無)', status: 'green', desc: '雙方皆無預備知識' };
+        } else if (wPNorm === pPNorm) {
+            fields['預備知識'] = { label: '預備知識', word: wPrereqStr, pdf: pPrereqStr, status: 'green', desc: '預備知識相符' };
+        } else if (calculateSimilarity(wPNorm, pPNorm) > 0.70 || wPNorm.includes(pPNorm) || pPNorm.includes(wPNorm)) {
+            fields['預備知識'] = { label: '預備知識', word: wPrereqStr, pdf: pPrereqStr, status: 'yellow', desc: '預備知識文字微差' };
+            hasYellow = true;
+        } else {
+            fields['預備知識'] = { label: '預備知識', word: wPrereqStr || '(無)', pdf: pPrereqStr || '(漏排)', status: 'red', desc: '預備知識不一致！' };
+            hasRed = true;
+        }
+    }
 
     // 12. 先修課程 (if present in Word or PDF)
     if ((w['先修課程'] && w['先修課程'].length > 0) || (p['先修課程'] && p['先修課程'].length > 0)) {
-        const preDiff = alignListItems(
-            Array.isArray(w['先修課程']) ? w['先修課程'] : (w['先修課程'] ? [w['先修課程']] : []),
-            Array.isArray(p['先修課程']) ? p['先修課程'] : (p['先修課程'] ? [p['先修課程']] : []),
-            '先修課程'
-        );
-        fields['先修課程'] = {
-            label: '先修課程',
-            isList: true,
-            word: `${(w['先修課程'] || []).length} 個項目`,
-            pdf: `${(p['先修課程'] || []).length} 個項目`,
-            wordItems: Array.isArray(w['先修課程']) ? w['先修課程'] : [],
-            pdfItems: Array.isArray(p['先修課程']) ? p['先修課程'] : [],
-            status: preDiff.status,
-            desc: preDiff.desc,
-            details: preDiff.details
-        };
-        if (preDiff.status === 'red') hasRed = true;
-        if (preDiff.status === 'yellow') hasYellow = true;
+        const wPreVal = w['先修課程'] || '';
+        const pPreVal = p['先修課程'] || '';
+        const preIsList = hasBulletMarkers(wPreVal) || hasBulletMarkers(pPreVal);
+        if (preIsList) {
+            const wPreArr = Array.isArray(wPreVal) ? wPreVal : [wPreVal];
+            const pPreArr = Array.isArray(pPreVal) ? pPreVal : [pPreVal];
+            const preDiff = alignListItems(wPreArr, pPreArr, '先修課程');
+            fields['先修課程'] = {
+                label: '先修課程',
+                isList: true,
+                word: `${wPreArr.length} 個項目`,
+                pdf: `${pPreArr.length} 個項目`,
+                wordItems: wPreArr,
+                pdfItems: pPreArr,
+                status: preDiff.status,
+                desc: preDiff.desc,
+                details: preDiff.details
+            };
+            if (preDiff.status === 'red') hasRed = true;
+            if (preDiff.status === 'yellow') hasYellow = true;
+        } else {
+            const wPreStr = Array.isArray(wPreVal) ? wPreVal.join('\n') : String(wPreVal || '');
+            const pPreStr = Array.isArray(pPreVal) ? pPreVal.join('\n') : String(pPreVal || '');
+            const wNorm = normalizeText(wPreStr);
+            const pNorm = normalizeText(pPreStr);
+            if (wNorm === pNorm) {
+                fields['先修課程'] = { label: '先修課程', word: wPreStr, pdf: pPreStr, status: 'green', desc: '先修課程相符' };
+            } else {
+                fields['先修課程'] = { label: '先修課程', word: wPreStr, pdf: pPreStr, status: 'yellow', desc: '先修課程文字微差' };
+                hasYellow = true;
+            }
+        }
     }
 
-    // 13. 課程目標 (依排版模式校對)
+    // 13. 課程目標 (依排版模式校對，一律為純文字段落比對，絕不切分成 list items！)
     if (layoutMode === 'objective' || layoutMode === 'both') {
         const objTextToCompare = (layoutMode === 'objective' && pContentMatchesWordObj)
             ? pContentText
             : pObjStr;
         const normPdfObj = normalizeText(objTextToCompare);
 
-        const wObjItems = w['課程目標_items'] || (wObjStr.includes('\n') ? wObjStr.split(/\n+/).map(s => s.trim()).filter(Boolean) : []);
-        const pObjItems = p['課程目標_items'] || (objTextToCompare.includes('\n') ? objTextToCompare.split(/\n+/).map(s => s.trim()).filter(Boolean) : []);
-
-        if (wObjItems.length > 1 || pObjItems.length > 1) {
-            const objListDiff = alignListItems(
-                wObjItems.length > 0 ? wObjItems : [wObjStr],
-                pObjItems.length > 0 ? pObjItems : [objTextToCompare],
-                '課程目標'
-            );
+        if (wObjNorm === normPdfObj) {
             fields['課程目標'] = {
                 label: '課程目標',
-                isList: true,
                 layoutTag: 'adopted-objective',
-                word: `${wObjItems.length} 個項目`,
-                pdf: `${pObjItems.length} 個項目`,
-                wordItems: wObjItems,
-                pdfItems: pObjItems,
-                status: objListDiff.status,
-                desc: objListDiff.desc + ' (本課採「課程目標」排版)',
-                details: objListDiff.details
+                word: wObjStr,
+                pdf: objTextToCompare,
+                status: 'green',
+                desc: '課程目標完全相符 (本課採「課程目標」排版)'
             };
-            if (objListDiff.status === 'red') hasRed = true;
-            if (objListDiff.status === 'yellow') hasYellow = true;
+        } else if (calculateSimilarity(wObjNorm, normPdfObj) > 0.70 || wObjNorm.includes(normPdfObj) || normPdfObj.includes(wObjNorm)) {
+            fields['課程目標'] = {
+                label: '課程目標',
+                layoutTag: 'adopted-objective',
+                word: wObjStr,
+                pdf: objTextToCompare,
+                status: 'yellow',
+                desc: '課程目標文字微調 (本課採「課程目標」排版)'
+            };
+            hasYellow = true;
         } else {
-            if (wObjNorm === normPdfObj) {
-                fields['課程目標'] = {
-                    label: '課程目標',
-                    layoutTag: 'adopted-objective',
-                    word: wObjStr,
-                    pdf: objTextToCompare,
-                    status: 'green',
-                    desc: '課程目標完全相符 (本課採「課程目標」排版)'
-                };
-            } else if (calculateSimilarity(wObjNorm, normPdfObj) > 0.70 || wObjNorm.includes(normPdfObj) || normPdfObj.includes(wObjNorm)) {
-                fields['課程目標'] = {
-                    label: '課程目標',
-                    layoutTag: 'adopted-objective',
-                    word: wObjStr,
-                    pdf: objTextToCompare,
-                    status: 'yellow',
-                    desc: '課程目標文字微調 (本課採「課程目標」排版)'
-                };
-                hasYellow = true;
-            } else {
-                fields['課程目標'] = {
-                    label: '課程目標',
-                    layoutTag: 'adopted-objective',
-                    word: wObjStr,
-                    pdf: objTextToCompare,
-                    status: 'red',
-                    desc: `課程目標不一致！(本課採「課程目標」排版)`
-                };
-                hasRed = true;
-            }
+            fields['課程目標'] = {
+                label: '課程目標',
+                layoutTag: 'adopted-objective',
+                word: wObjStr,
+                pdf: objTextToCompare,
+                status: 'red',
+                desc: `課程目標不一致！(本課採「課程目標」排版)`
+            };
+            hasRed = true;
         }
     } else {
         // layoutMode is 'content' or 'none' -> 課程目標免排，視為正常略過！
@@ -2353,9 +2477,12 @@ function createCourseCard(item, idx) {
                 } else if (h.type === 'bullet' || h.type === 'sub-clause') {
                     wBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-600 shrink-0 mt-0.5">●</span>`;
                     pBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold ${pBadgeBg} shrink-0 mt-0.5">●</span>`;
+                } else if (h.type === 'number' && h.badgeText) {
+                    wBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-3xs font-mono font-bold bg-slate-100 text-slate-700 shrink-0 mt-0.5">${h.badgeText}</span>`;
+                    pBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-3xs font-mono font-bold ${pBadgeBg} shrink-0 mt-0.5">${h.badgeText}</span>`;
                 } else {
-                    wBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-3xs font-mono font-bold bg-slate-100 text-slate-700 shrink-0 mt-0.5">${h.badgeText || d.index}</span>`;
-                    pBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-3xs font-mono font-bold ${pBadgeBg} shrink-0 mt-0.5">${h.badgeText || d.index}</span>`;
+                    wBadgeHtml = '';
+                    pBadgeHtml = '';
                 }
 
                 // Strip leading duplicate bullets if bullet badge is already shown
@@ -2392,9 +2519,12 @@ function createCourseCard(item, idx) {
 
             const subItemCount = field.details.filter(d => d.hierarchy && d.hierarchy.level >= 2).length;
             const mainItemCount = field.details.length - subItemCount;
-            const countBadgeHtml = subItemCount > 0
-                ? `<span class="mt-1 inline-block text-3xs px-2 py-0.5 rounded font-mono bg-indigo-50 text-indigo-700 border border-indigo-100 font-medium">共 ${mainItemCount} 主項 / ${subItemCount} 子項</span>`
-                : `<span class="mt-1 inline-block text-3xs px-2 py-0.5 rounded font-mono bg-slate-100 text-slate-500 font-normal">共 ${field.details.length} 項</span>`;
+            const isSinglePlainText = field.details.length <= 1 && (!field.details[0] || !field.details[0].hierarchy || field.details[0].hierarchy.type === 'text');
+            const countBadgeHtml = isSinglePlainText
+                ? ''
+                : (subItemCount > 0
+                    ? `<span class="mt-1 inline-block text-3xs px-2 py-0.5 rounded font-mono bg-indigo-50 text-indigo-700 border border-indigo-100 font-medium">共 ${mainItemCount} 主項 / ${subItemCount} 子項</span>`
+                    : `<span class="mt-1 inline-block text-3xs px-2 py-0.5 rounded font-mono bg-slate-100 text-slate-500 font-normal">共 ${field.details.length} 項</span>`);
 
             let tagBadgeHtml = '';
             if (field.layoutTag) {
@@ -2682,7 +2812,7 @@ function copyErrorReport() {
                     report += `   - ${f.label}：${f.desc}\n`;
                     const errDetails = f.details.filter(d => d.status === 'red');
                     errDetails.forEach(d => {
-                        const badge = d.hierarchy ? (d.hierarchy.level >= 2 ? `子項 ${d.hierarchy.badgeText}` : `第 ${d.hierarchy.badgeText || d.index} 項`) : `第 ${d.index} 項`;
+                        const badge = d.hierarchy ? (d.hierarchy.level >= 2 ? (d.hierarchy.badgeText ? `子項 ${d.hierarchy.badgeText}` : `子項`) : (d.hierarchy.badgeText ? `第 ${d.hierarchy.badgeText} 項` : `第 ${d.index} 項`)) : `第 ${d.index} 項`;
                         report += `     • [${badge}] Word「${d.word || '無'}」⇄ PDF「${d.pdf || '漏排'}」➔ ${d.desc}\n`;
                     });
                 } else {
