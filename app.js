@@ -361,8 +361,9 @@ function extractCourseIdentityFromWord(rows, course) {
 function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
     // 1. In promotional flyers, the course title banner is strictly located within metaY + 4 to metaY + 46.
     // Breadcrumbs (y >= metaY + 48) and page headers (y > metaY + 60) reside above.
+    // Out-of-table elements such as side tab markers (x < 35) are strictly excluded.
     const maxHeaderY = Math.min(courseTop, metaY + 46);
-    let validItems = headerItems.filter(it => (it.x < 95 ? it.y >= metaY - 5 : it.y > metaY + 3) && it.y <= maxHeaderY);
+    let validItems = headerItems.filter(it => (it.x < 95 ? (it.x >= 35 && it.y >= metaY - 5) : it.y > metaY + 3) && it.y <= maxHeaderY);
 
     // Merge superscript symbols (® / ™ / ©) into the preceding word/acronym
     const supers = validItems.filter(it => /^[®™©]$/.test(it.str));
@@ -406,8 +407,9 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
     for (const line of lines) {
         const lineMaxH = Math.max(...line.map(it => it.h || 0));
 
-        // 1. Identify left-side course code badge (x < 95)
-        const leftBadge = line.find(it => it.x < 95 && /^[A-Za-z0-9_-]{2,10}$/.test(it.str));
+        // 1. Identify left-side course code badge inside table bounds (35 <= x < 95)
+        // Strictly exclude external margin tabs (e.g. EPI, PMI, CompTIA)
+        const leftBadge = line.find(it => it.x >= 35 && it.x < 95 && /^[A-Za-z0-9_-]{2,10}$/.test(it.str) && !['EPI', 'PMI', 'CompTIA'].includes(it.str));
         if (leftBadge && !code) {
             code = leftBadge.str;
         }
@@ -422,6 +424,8 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
             lineText.match(/^\|\s*.*\s*\|$/) || 
             lineText === '區塊鏈' || 
             lineText === '鑒真數位' ||
+            lineText === 'EPI' ||
+            lineText === 'PMI' ||
             lineText.includes('認可之資通安全專業證照') ||
             // Breadcrumbs like "CompTIA SecAI+ 認證" with small font (h <= 10)
             ((lineText.endsWith('認證') || lineText.endsWith('證照')) && lineMaxH <= 10)
@@ -430,7 +434,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         }
 
         const standaloneCodeMatch = lineText.match(/^[A-Za-z0-9_-]{2,10}$/);
-        if (!code && standaloneCodeMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course'].includes(standaloneCodeMatch[0])) {
+        if (!code && standaloneCodeMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course', 'EPI', 'PMI', 'CompTIA'].includes(standaloneCodeMatch[0])) {
             code = standaloneCodeMatch[0];
             continue;
         }
@@ -688,7 +692,7 @@ async function parsePdf(buffer) {
             x: Math.round(it.transform[4]),
             y: Math.round(it.transform[5]),
             str: it.str.trim()
-        })).filter(it => it.str.length > 0 && it.x < 565);
+        })).filter(it => it.str.length > 0 && it.x >= 35 && it.x < 565);
 
         // 1. Extract vector rectangles to determine exact table cell bounds
         const opList = await page.getOperatorList();
@@ -864,8 +868,8 @@ async function parsePdf(buffer) {
                 course['教材'] = matVal;
             }
 
-            // Extract CourseIdentity from PDF header items (嚴格擷取英文原廠副標題與代碼，嚴禁忽略英文副標)
-            const headerItems = items.filter(it => (it.x < 95 ? it.y >= metaY - 5 : it.y > metaY + 3) && it.y <= courseTop);
+            // Extract CourseIdentity from PDF header items (嚴格擷取英文原廠副標題與代碼，嚴禁忽略英文副標，且限定於表格內 x >= 35 杜絕側邊頁籤)
+            const headerItems = items.filter(it => (it.x < 95 ? (it.x >= 35 && it.y >= metaY - 5) : it.y > metaY + 3) && it.y <= courseTop);
             const identity = extractCourseIdentityFromPdf(headerItems, metaY, courseTop);
 
             course.course_code = identity.course_code;
