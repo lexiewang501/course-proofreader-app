@@ -1139,6 +1139,71 @@ function splitRecommendedCourses(text) {
 }
 
 /**
+ * Analyzes item text to determine its structural hierarchy level (main number, bullet sub-item, header).
+ */
+function analyzeItemHierarchy(itemText, prevH, fieldLabel) {
+    if (!itemText) return { level: 1, type: 'text', badgeText: '•', indent: '', text: '' };
+    const raw = itemText.trim();
+
+    // 1. Explicit bullet dot (●, •, ※, ·, -, *)
+    const bMatch = raw.match(/^([●•※\-\*·])\s*(.*)$/);
+    if (bMatch) {
+        return {
+            level: 2,
+            type: 'bullet',
+            badgeText: '●',
+            indent: 'md:ml-6 ml-3 pl-3 border-l-2 border-indigo-200',
+            cleanText: bMatch[2] || raw
+        };
+    }
+
+    // 2. Explicit numbered items (1., 2., 3., 1、, 2、, etc.)
+    const nMatch = raw.match(/^(\d+)[.、]\s*(.*)$/);
+    if (nMatch) {
+        return {
+            level: 1,
+            type: 'number',
+            badgeText: nMatch[1],
+            indent: '',
+            cleanText: raw
+        };
+    }
+
+    // 3. Section/Scheme Header ending with colon (e.g. 課程優惠方案：, 重聽服務：, 實務應用：)
+    const hMatch = raw.match(/^([^：:\n]{2,10})[：:]\s*(.*)$/);
+    if (hMatch && (!hMatch[2] || hMatch[2].length === 0)) {
+        return {
+            level: 0,
+            type: 'header',
+            badgeText: '方案',
+            indent: '',
+            cleanText: raw
+        };
+    }
+
+    // 4. Sub-clauses under a header (e.g. 限時優惠：..., 續報優惠：..., 學生優惠價：...)
+    if (fieldLabel === '備註事項' && prevH && (prevH.type === 'header' || (prevH.type === 'number' && /優惠方案/.test(prevH.cleanText)) || prevH.type === 'sub-clause')) {
+        if (/^(?:限時|續報|學生|早鳥|企業|校園|加贈|贈送)/.test(raw)) {
+            return {
+                level: 2,
+                type: 'sub-clause',
+                badgeText: '●',
+                indent: 'md:ml-6 ml-3 pl-3 border-l-2 border-indigo-200',
+                cleanText: raw
+            };
+        }
+    }
+
+    return {
+        level: 1,
+        type: 'text',
+        badgeText: '•',
+        indent: '',
+        cleanText: raw
+    };
+}
+
+/**
  * Needleman-Wunsch sequence alignment for Word and PDF list items.
  * Guarantees optimal horizontal alignment so missing or modified items are clearly visible side-by-side.
  */
@@ -1202,31 +1267,67 @@ function alignListItems(wItems, pItems, fieldLabel) {
     let matchCount = 0;
     let hasRed = false;
     let hasYellow = false;
+    let prevH = null;
+    let currentMainNum = 0;
+    let mainCount = 0;
+    let subCount = 0;
 
     aligned.forEach((pair, idx) => {
         const w = pair.word;
         const p = pair.pdf;
+        const sampleText = w || p || '';
+        const h = analyzeItemHierarchy(sampleText, prevH, fieldLabel);
+
+        if (h.type === 'number') {
+            currentMainNum = parseInt(h.badgeText, 10);
+        } else if (h.type === 'text' && !/^[●•※\-\*·]/.test(sampleText)) {
+            currentMainNum++;
+            if (!h.badgeText || h.badgeText === '•') {
+                h.badgeText = String(currentMainNum);
+            }
+        }
+        if (h.level >= 2) subCount++;
+        else mainCount++;
+        prevH = h;
+
+        let itemStatus = 'green';
+        let itemDesc = '相符';
+
         if (w && p) {
             const wNorm = normalizeText(cleanItemText(w));
             const pNorm = normalizeText(cleanItemText(p));
             if (wNorm === pNorm) {
                 matchCount++;
-                details.push({ index: idx + 1, status: 'green', word: w, pdf: p, desc: '相符' });
+                itemStatus = 'green';
+                itemDesc = '相符';
             } else if (calculateSimilarity(wNorm, pNorm) >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm)) {
                 matchCount++;
                 hasYellow = true;
-                details.push({ index: idx + 1, status: 'yellow', word: w, pdf: p, desc: '文字微差' });
+                itemStatus = 'yellow';
+                itemDesc = '文字微差';
             } else {
                 hasRed = true;
-                details.push({ index: idx + 1, status: 'red', word: w, pdf: p, desc: '項目內容不符' });
+                itemStatus = 'red';
+                itemDesc = '項目內容不符';
             }
         } else if (w && !p) {
             hasRed = true;
-            details.push({ index: idx + 1, status: 'red', word: w, pdf: null, desc: 'PDF 漏排此項目' });
+            itemStatus = 'red';
+            itemDesc = 'PDF 漏排此項目';
         } else if (!w && p) {
             hasYellow = true;
-            details.push({ index: idx + 1, status: 'yellow', word: null, pdf: p, desc: 'PDF 多排此項目' });
+            itemStatus = 'yellow';
+            itemDesc = 'PDF 多排此項目';
         }
+
+        details.push({
+            index: idx + 1,
+            status: itemStatus,
+            word: w,
+            pdf: p,
+            desc: itemDesc,
+            hierarchy: h
+        });
     });
 
     let overallStatus = 'green';
@@ -1433,6 +1534,8 @@ function compareCourseData(wordCourses, pdfCourses) {
 
 function createMissingListField(label, rawVal, isWord) {
     const arr = Array.isArray(rawVal) ? rawVal : (rawVal ? [rawVal] : []);
+    let prevH = null;
+    let mainNum = 0;
     return {
         status: 'gray',
         label,
@@ -1440,13 +1543,24 @@ function createMissingListField(label, rawVal, isWord) {
         word: isWord ? `${arr.length} 個項目` : '-',
         pdf: isWord ? '-' : `${arr.length} 個項目`,
         desc: isWord ? 'PDF 缺少此課程' : 'Word 原稿無此課程',
-        details: arr.map((item, i) => ({
-            index: i + 1,
-            status: 'gray',
-            word: isWord ? item : null,
-            pdf: isWord ? null : item,
-            desc: isWord ? '未排入 PDF' : '原稿未列出'
-        }))
+        details: arr.map((item, i) => {
+            const h = analyzeItemHierarchy(item, prevH, label);
+            if (h.type === 'number') {
+                mainNum = parseInt(h.badgeText, 10);
+            } else if (h.type === 'text' && !/^[●•※\-\*·]/.test(item)) {
+                mainNum++;
+                if (!h.badgeText || h.badgeText === '•') h.badgeText = String(mainNum);
+            }
+            prevH = h;
+            return {
+                index: i + 1,
+                status: 'gray',
+                word: isWord ? item : null,
+                pdf: isWord ? null : item,
+                desc: isWord ? '未排入 PDF' : '原稿未列出',
+                hierarchy: h
+            };
+        })
     };
 }
 
@@ -1661,7 +1775,8 @@ function compareSinglePair(w, p) {
                 word: c + (idx === 0 ? ' (首門推薦)' : ' (依規則免排PDF)'),
                 pdf: idx === 0 ? null : '(依規則免排)',
                 status: idx === 0 ? 'red' : 'gray',
-                desc: idx === 0 ? 'PDF 漏排此首門推薦課程！' : '第2門以上未排PDF視為正常'
+                desc: idx === 0 ? 'PDF 漏排此首門推薦課程！' : '第2門以上未排PDF視為正常',
+                hierarchy: { level: 1, type: 'number', badgeText: String(idx + 1), indent: '', cleanText: c }
             }))
         };
         hasRed = true;
@@ -1703,7 +1818,8 @@ function compareSinglePair(w, p) {
                 word: wFirstRec + ' (首門推薦)',
                 pdf: pFirstRec,
                 status: recStatus,
-                desc: isMatch ? '首門推薦課程相符' : (recStatus === 'yellow' ? '文字微差' : '首門課程不符')
+                desc: isMatch ? '首門推薦課程相符' : (recStatus === 'yellow' ? '文字微差' : '首門課程不符'),
+                hierarchy: { level: 1, type: 'number', badgeText: '1', indent: '', cleanText: wFirstRec }
             }
         ];
         for (let ri = 1; ri < wRecList.length; ri++) {
@@ -1712,7 +1828,8 @@ function compareSinglePair(w, p) {
                 word: wRecList[ri] + ' (依規則免排PDF)',
                 pdf: '(依規則免排)',
                 status: 'gray',
-                desc: '第2門以上推薦課程未排PDF視為正常'
+                desc: '第2門以上推薦課程未排PDF視為正常',
+                hierarchy: { level: 1, type: 'number', badgeText: String(ri + 1), indent: '', cleanText: wRecList[ri] }
             });
         }
 
@@ -2064,25 +2181,45 @@ function createCourseCard(item, idx) {
                     pBadgeBg = 'bg-slate-100 text-slate-500';
                 }
 
+                const h = d.hierarchy || { level: 1, type: 'text', badgeText: `${d.index}`, indent: '' };
+
+                // Badge display based on hierarchy level and type
+                let wBadgeHtml = '';
+                let pBadgeHtml = '';
+                if (h.type === 'header') {
+                    wBadgeHtml = `<span class="inline-flex items-center justify-center px-1.5 h-5 rounded text-3xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0 mt-0.5">方案</span>`;
+                    pBadgeHtml = `<span class="inline-flex items-center justify-center px-1.5 h-5 rounded text-3xs font-bold ${pBadgeBg} shrink-0 mt-0.5">方案</span>`;
+                } else if (h.type === 'bullet' || h.type === 'sub-clause') {
+                    wBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-600 shrink-0 mt-0.5">●</span>`;
+                    pBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold ${pBadgeBg} shrink-0 mt-0.5">●</span>`;
+                } else {
+                    wBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-3xs font-mono font-bold bg-slate-100 text-slate-700 shrink-0 mt-0.5">${h.badgeText || d.index}</span>`;
+                    pBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-3xs font-mono font-bold ${pBadgeBg} shrink-0 mt-0.5">${h.badgeText || d.index}</span>`;
+                }
+
+                // Strip leading duplicate bullets if bullet badge is already shown
+                const displayWord = (d.word && h.type === 'bullet') ? d.word.replace(/^[●•※\-\*·]\s*/, '') : d.word;
+                const displayPdf = (d.pdf && h.type === 'bullet') ? d.pdf.replace(/^[●•※\-\*·]\s*/, '') : d.pdf;
+
+                // Hierarchy row indentation and header styling
+                const rowIndentClass = h.level >= 2 ? 'md:ml-6 ml-3 pl-2.5 border-l-2 border-indigo-200/70' : '';
+                const headerBoxClass = h.type === 'header' ? 'font-semibold bg-slate-50/80' : '';
+
                 itemsHtml += `
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch ${rowIndentClass}">
                         <!-- Word Item Box -->
-                        <div class="p-2.5 rounded-lg border border-slate-200 bg-white flex items-start space-x-2 text-xs text-slate-800 leading-relaxed whitespace-pre-line break-words shadow-2xs">
-                            <span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-3xs font-mono font-bold bg-slate-100 text-slate-600 shrink-0 mt-0.5">
-                                ${d.index}
-                            </span>
+                        <div class="p-2.5 rounded-lg border border-slate-200 ${h.type === 'header' ? headerBoxClass : 'bg-white'} flex items-start space-x-2 text-xs text-slate-800 leading-relaxed whitespace-pre-line break-words shadow-2xs">
+                            ${wBadgeHtml}
                             <div class="flex-1 min-w-0">
-                                ${d.word ? d.word : '<span class="text-slate-400 italic">(Word 無此項)</span>'}
+                                ${displayWord ? displayWord : '<span class="text-slate-400 italic">(Word 無此項)</span>'}
                             </div>
                         </div>
 
                         <!-- PDF Item Box -->
-                        <div class="p-2.5 rounded-lg border ${pBorder} ${pBg} flex items-start space-x-2 text-xs ${pTextColor} leading-relaxed whitespace-pre-line break-words shadow-2xs">
-                            <span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-3xs font-mono font-bold ${pBadgeBg} shrink-0 mt-0.5">
-                                ${d.index}
-                            </span>
+                        <div class="p-2.5 rounded-lg border ${pBorder} ${pBg} ${h.type === 'header' ? headerBoxClass : ''} flex items-start space-x-2 text-xs ${pTextColor} leading-relaxed whitespace-pre-line break-words shadow-2xs">
+                            ${pBadgeHtml}
                             <div class="flex-1 min-w-0">
-                                ${d.pdf ? d.pdf : '<span class="font-bold text-red-600">❌ (PDF 漏排此項)</span>'}
+                                ${displayPdf ? displayPdf : '<span class="font-bold text-red-600">❌ (PDF 漏排此項)</span>'}
                                 ${d.desc && d.status === 'red' && d.pdf ? `<div class="mt-1 text-3xs text-red-600 font-normal">[${d.desc}]</div>` : ''}
                             </div>
                         </div>
@@ -2092,13 +2229,17 @@ function createCourseCard(item, idx) {
 
             const scrollContainerClass = field.details.length > 8 ? 'max-h-[480px] overflow-y-auto pr-1' : '';
 
+            const subItemCount = field.details.filter(d => d.hierarchy && d.hierarchy.level >= 2).length;
+            const mainItemCount = field.details.length - subItemCount;
+            const countBadgeHtml = subItemCount > 0
+                ? `<span class="mt-1 inline-block text-3xs px-2 py-0.5 rounded font-mono bg-indigo-50 text-indigo-700 border border-indigo-100 font-medium">共 ${mainItemCount} 主項 / ${subItemCount} 子項</span>`
+                : `<span class="mt-1 inline-block text-3xs px-2 py-0.5 rounded font-mono bg-slate-100 text-slate-500 font-normal">共 ${field.details.length} 項</span>`;
+
             rowsHtml += `
                 <tr class="border-b border-slate-100 last:border-none ${rowBg}">
                     <td class="py-3 px-4 text-xs font-semibold text-slate-700 whitespace-nowrap align-top">
                         <div class="font-bold text-slate-800">${field.label}</div>
-                        <span class="mt-1 inline-block text-3xs px-2 py-0.5 rounded font-mono bg-slate-100 text-slate-500 font-normal">
-                            共 ${field.details.length} 項
-                        </span>
+                        ${countBadgeHtml}
                     </td>
                     <td colspan="2" class="py-2.5 px-4 align-top">
                         <div class="space-y-2 ${scrollContainerClass}">
@@ -2280,7 +2421,8 @@ function copyErrorReport() {
                         report += `   - ${f.label}：${f.desc}\n`;
                         const errDetails = f.details.filter(d => d.status === 'red');
                         errDetails.forEach(d => {
-                            report += `     • [第 ${d.index} 項] Word「${d.word || '無'}」⇄ PDF「${d.pdf || '漏排'}」➔ ${d.desc}\n`;
+                            const badge = d.hierarchy ? (d.hierarchy.level >= 2 ? `子項 ${d.hierarchy.badgeText}` : `第 ${d.hierarchy.badgeText || d.index} 項`) : `第 ${d.index} 項`;
+                            report += `     • [${badge}] Word「${d.word || '無'}」⇄ PDF「${d.pdf || '漏排'}」➔ ${d.desc}\n`;
                         });
                     } else {
                         report += `   - ${f.label}：Word 原稿寫「${f.word}」，但 PDF 排版為「${f.pdf}」 ➔ ${f.desc}\n`;
