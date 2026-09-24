@@ -1003,7 +1003,7 @@ function extractListItems(paragraphs, fullText) {
 function hasBulletMarkers(val) {
     if (!val) return false;
     const arr = Array.isArray(val) ? val : [val];
-    const bulletPattern = /^\s*(?:\d+[、]|(?:\d+)\.(?!\d)\s*|\(\d+\)|\[\d+\]|[①-⑩]|[•●※\-\*·◆▪]|(?:Lesson|Module|Chapter)\s*\d+)/i;
+    const bulletPattern = /^\s*(?:\d+[、]|(?:\d+)\.(?!\d)\s*|\(\d+\)|\[\d+\]|[①-⑩]|[•●※·◆▪]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter)\s*\d+)/i;
     return arr.some(s => bulletPattern.test((s || '').trim()));
 }
 
@@ -1023,7 +1023,8 @@ function isNotesItemStart(text, currentItem) {
     if (/^(?:\d+[、]|\d+\.(?!\d)\s*|\(\d+\)|\[\d+\]|[①-⑩])/.test(trimmed)) return true;
 
     // 2. Explicit bullet symbol (e.g. ● • ※ - * · ＊ ★ ☆ ✦ ✧)
-    if (/^[•●※\-\*·◆▪＊★☆✦✧]/.test(trimmed)) return true;
+    if (/^[•●※·◆▪＊★☆✦✧]/.test(trimmed)) return true;
+    if (/^[-*](?:\s+|$)/.test(trimmed)) return true;
 
     // 3. Scheme / discount / note headers ending in colon
     if (/^(?:課程優惠方案|限時優惠|早鳥優惠|早鳥優惠價|專案優惠|續報優惠|學生優惠|學生專屬優惠|重聽服務|原廠優惠|證照優惠|方案\s*\d*)[：:]/.test(trimmed)) return true;
@@ -1086,9 +1087,13 @@ function extractNotesFromPdfSection(secItems) {
  */
 function getColumnSplits(secItems) {
     if (!secItems || secItems.length === 0) return [];
+    
+    // 1. Identify true bullet / item markers at the start of a column/line
+    // Hyphen / asterisk MUST be followed by whitespace or be standalone, NEVER hyphenated words like -Series or -DataFrame
     const bullets = secItems.filter(it => 
-        /^(?:\d+[、]|\d+\.(?!\d)\s*|\(\d+\)|\[\d+\]|[①-⑩])/.test(it.str) || 
-        /^[•●※\-\*·◆▪]/.test(it.str) ||
+        /^(?:\d+[、]|(?:\d+)\.(?!\d)\s*|\(\d+\)|\[\d+\]|[①-⑩])/.test(it.str) || 
+        /^[•●※·◆▪]/.test(it.str) ||
+        /^[-*](?:\s+|$)/.test(it.str) ||
         /^Lesson\s*\d+/i.test(it.str)
     );
 
@@ -1097,7 +1102,8 @@ function getColumnSplits(secItems) {
         const clusters = [];
         for (const x of bulletXs) {
             const last = clusters[clusters.length - 1];
-            if (!last || x - last.max > 40) {
+            // Columns on A4 page must have significant horizontal separation (>= 60pt)
+            if (!last || x - last.max > 60) {
                 clusters.push({ min: x, max: x, count: 1 });
             } else {
                 last.max = Math.max(last.max, x);
@@ -1105,16 +1111,23 @@ function getColumnSplits(secItems) {
                 last.count++;
             }
         }
-        const validClusters = clusters.filter(c => c.count >= 2 || (clusters.length <= 3 && c.count >= 1 && c.min > 200));
+        // Column 1 is near left margin (x < 200).
+        // Any subsequent column (Column 2, Column 3) MUST start at x > 200.
+        const validClusters = clusters.filter((c, idx) => {
+            if (idx === 0) return true;
+            return c.min > 200 && (c.count >= 2 || (clusters.length <= 3 && c.count >= 1));
+        });
+
         if (validClusters.length >= 2) {
             const splits = [];
             for (let i = 1; i < validClusters.length; i++) {
-                splits.push(validClusters[i].min - 8);
+                splits.push(Math.round(validClusters[i].min - 8));
             }
             return splits;
         }
     }
 
+    // 2. Gutter search fallback between 220 and 380
     const intervals = secItems.map(it => {
         const charWidth = /[\u4e00-\u9fa5]/.test(it.str) ? 10 : 6;
         return { start: it.x, end: it.x + Math.max(it.str.length * charWidth, 10) };
@@ -1212,7 +1225,8 @@ function assembleLinesIntoItems(lines, isNotes = false) {
 
         // 1. Explicit bullet / numbering
         if (/^\d+[.、]/.test(text)) return true;
-        if (/^[•●※\-\*]/.test(text)) return true;
+        if (/^[•●※·◆▪]/.test(text)) return true;
+        if (/^[-*](?:\s+|$)/.test(text)) return true;
         if (/^(?:Lesson|Module|Chapter|Unit|Section|Topic)\s*\d+/i.test(text)) return true;
 
         // 2. Colon headers (e.g. 課程優惠方案：, 限時優惠：, 續報優惠：, 學生優惠價：, 重聽服務：, 實務應用：)
