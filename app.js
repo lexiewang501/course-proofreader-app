@@ -585,6 +585,11 @@ async function parseDocx(buffer) {
                         const allParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
                         const fullRec = row.slice(1).map(c => c.fullText).join(' ').trim();
                         course['後續推薦課程'] = allParas.length > 0 ? allParas : splitRecommendedCourses(fullRec);
+                    } else if (label === '課程目標') {
+                        const cellParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
+                        const cellFull = row.slice(1).map(c => c.fullText).join(' ').trim();
+                        course['課程目標'] = cellFull;
+                        course['課程目標_items'] = cellParas.length > 0 ? cellParas : splitOutlineItems(cellFull);
                     } else {
                         const val = row.slice(1).map(c => c.fullText).join(' ').trim();
                         course[label] = val;
@@ -597,6 +602,9 @@ async function parseDocx(buffer) {
                             course[label] = extractListItems([], val);
                         } else if (label === '後續推薦課程') {
                             course['後續推薦課程'] = splitRecommendedCourses(val);
+                        } else if (label === '課程目標') {
+                            course['課程目標'] = val;
+                            course['課程目標_items'] = splitOutlineItems(val);
                         } else {
                             course[label] = val;
                         }
@@ -819,8 +827,12 @@ async function parsePdf(buffer) {
                 } else if (sec.label === '後續推薦課程') {
                     const fullText = secItems.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
                     course['後續推薦課程'] = splitRecommendedCourses(fullText);
+                } else if (sec.label === '課程目標') {
+                    const text = secItems.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
+                    course['課程目標'] = text;
+                    course['課程目標_items'] = extractListFromPdfSection(secItems, false);
                 } else {
-                    // Strictly isolate 課程目標, 學會技能, etc.
+                    // Strictly isolate 學會技能, etc.
                     const text = secItems.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
                     course[sec.label] = text;
                 }
@@ -1484,7 +1496,9 @@ function compareCourseData(wordCourses, pdfCourses) {
                     '先修課程': createMissingListField('先修課程', wCourse['先修課程'], true),
                     '課程目標': { status: 'gray', label: '課程目標', word: (Array.isArray(wCourse['課程目標']) ? wCourse['課程目標'].join('\n') : wCourse['課程目標']) || '-', pdf: '-', desc: '缺少' },
                     '學會技能': { status: 'gray', label: '學會技能', word: (Array.isArray(wCourse['學會技能']) ? wCourse['學會技能'].join('\n') : wCourse['學會技能']) || '-', pdf: '-', desc: '缺少' }
-                }
+                },
+                layoutMode: 'none',
+                layoutModeText: 'PDF 漏排此課程'
             });
         }
     }
@@ -1524,7 +1538,9 @@ function compareCourseData(wordCourses, pdfCourses) {
                     '先修課程': createMissingListField('先修課程', pCourse['先修課程'], false),
                     '課程目標': { status: 'gray', label: '課程目標', word: '-', pdf: (Array.isArray(pCourse['課程目標']) ? pCourse['課程目標'].join('\n') : pCourse['課程目標']) || '-', desc: '原稿無' },
                     '學會技能': { status: 'gray', label: '學會技能', word: '-', pdf: (Array.isArray(pCourse['學會技能']) ? pCourse['學會技能'].join('\n') : pCourse['學會技能']) || '-', desc: '原稿無' }
-                }
+                },
+                layoutMode: 'none',
+                layoutModeText: 'Word 原稿無此課程'
             });
         }
     }
@@ -1701,25 +1717,112 @@ function compareSinglePair(w, p) {
         hasRed = true;
     }
 
-    // 7. 課程內容 (Rule 1 & 2: 保持嚴格原名『課程內容』，List[str] 隔離比對與水平對齊)
-    const contentDiff = alignListItems(
-        Array.isArray(w['課程內容']) ? w['課程內容'] : (w['課程內容'] ? [w['課程內容']] : []),
-        Array.isArray(p['課程內容']) ? p['課程內容'] : (p['課程內容'] ? [p['課程內容']] : []),
-        '課程內容'
+    // ==========================================
+    // 排版模式判定（課程內容 vs 課程目標）
+    // 業務規則：因 PDF 排版空間限制，美編有時採「課程目標」排版，有時採「課程內容」排版。
+    // 以 PDF 排版結果為準校對 Word；兩者出現任一種皆視為正常，並明確標記本課程排版模式。
+    // ==========================================
+    const wContentArr = Array.isArray(w['課程內容']) ? w['課程內容'] : (w['課程內容'] ? [w['課程內容']] : []);
+    const pContentArr = Array.isArray(p['課程內容']) ? p['課程內容'] : (p['課程內容'] ? [p['課程內容']] : []);
+
+    const wObjStr = Array.isArray(w['課程目標']) ? w['課程目標'].join('\n') : (w['課程目標'] || '');
+    const pObjStr = Array.isArray(p['課程目標']) ? p['課程目標'].join('\n') : (p['課程目標'] || '');
+    const wObjNorm = normalizeText(wObjStr);
+    const pObjNorm = normalizeText(pObjStr);
+
+    const hasPContent = pContentArr.length > 0;
+    const hasPObjective = Boolean(pObjNorm);
+
+    const pContentText = pContentArr.join(' ');
+    const pContentNorm = normalizeText(pContentText);
+    const pContentMatchesWordObj = hasPContent && wObjNorm && (
+        calculateSimilarity(pContentNorm, wObjNorm) > 0.60 ||
+        (wObjNorm.length > 20 && pContentNorm.includes(wObjNorm)) ||
+        (pContentNorm.length > 20 && wObjNorm.includes(pContentNorm))
     );
-    fields['課程內容'] = {
-        label: '課程內容',
-        isList: true,
-        word: `${(w['課程內容'] || []).length} 個項目`,
-        pdf: `${(p['課程內容'] || []).length} 個項目`,
-        wordItems: Array.isArray(w['課程內容']) ? w['課程內容'] : [],
-        pdfItems: Array.isArray(p['課程內容']) ? p['課程內容'] : [],
-        status: contentDiff.status,
-        desc: contentDiff.desc,
-        details: contentDiff.details
-    };
-    if (contentDiff.status === 'red') hasRed = true;
-    if (contentDiff.status === 'yellow') hasYellow = true;
+
+    const wContentText = wContentArr.join(' ');
+    const wContentNorm = normalizeText(wContentText);
+    const pObjMatchesWordContent = hasPObjective && wContentNorm && (
+        calculateSimilarity(pObjNorm, wContentNorm) > 0.60 ||
+        (wContentNorm.length > 20 && pObjNorm.includes(wContentNorm)) ||
+        (pObjNorm.length > 20 && wContentNorm.includes(pObjNorm))
+    );
+
+    let layoutMode = 'content'; // 'content' | 'objective' | 'both' | 'none'
+    let layoutModeText = '課程內容';
+
+    if (hasPContent && hasPObjective) {
+        layoutMode = 'both';
+        layoutModeText = '課程目標與課程內容';
+    } else if (hasPObjective && !hasPContent) {
+        if (pObjMatchesWordContent) {
+            layoutMode = 'content';
+            layoutModeText = '課程內容 (PDF標為目標)';
+        } else {
+            layoutMode = 'objective';
+            layoutModeText = '課程目標';
+        }
+    } else if (hasPContent && !hasPObjective) {
+        if (pContentMatchesWordObj && (!wContentArr.length || calculateSimilarity(pContentNorm, wContentNorm) < 0.40)) {
+            layoutMode = 'objective';
+            layoutModeText = '課程目標 (PDF標為內容)';
+        } else {
+            layoutMode = 'content';
+            layoutModeText = '課程內容';
+        }
+    } else {
+        layoutMode = 'none';
+        layoutModeText = '未排課程大綱/目標';
+    }
+
+    // 7. 課程內容 (依排版模式校對)
+    if (layoutMode === 'content' || layoutMode === 'both') {
+        const contentItemsToCompare = (layoutMode === 'content' && pObjMatchesWordContent)
+            ? (p['課程目標_items'] || splitOutlineItems(pObjStr))
+            : pContentArr;
+
+        const contentDiff = alignListItems(
+            wContentArr,
+            contentItemsToCompare,
+            '課程內容'
+        );
+        fields['課程內容'] = {
+            label: '課程內容',
+            isList: true,
+            layoutTag: 'adopted-content',
+            word: `${wContentArr.length} 個項目`,
+            pdf: `${contentItemsToCompare.length} 個項目`,
+            wordItems: wContentArr,
+            pdfItems: contentItemsToCompare,
+            status: contentDiff.status,
+            desc: contentDiff.desc + (layoutMode === 'both' ? ' (同時排入目標與內容)' : ' (本課採「課程內容」排版)'),
+            details: contentDiff.details
+        };
+        if (contentDiff.status === 'red') hasRed = true;
+        if (contentDiff.status === 'yellow') hasYellow = true;
+    } else {
+        // layoutMode is 'objective' or 'none' -> 課程內容免排，視為正常！
+        fields['課程內容'] = {
+            label: '課程內容',
+            isList: true,
+            layoutTag: 'skipped-objective',
+            word: `${wContentArr.length} 個項目`,
+            pdf: '(依排版規則免排)',
+            wordItems: wContentArr,
+            pdfItems: [],
+            status: 'gray', // ⚪ 正常略過，嚴禁亮紅燈！
+            desc: `依版面排版規則略過 (美編採「${layoutModeText}」排版，免排課程內容，正常)`,
+            details: wContentArr.map((item, idx) => ({
+                index: idx + 1,
+                status: 'gray',
+                word: item,
+                pdf: '(依排版規則免排)',
+                desc: `本課採「${layoutModeText}」排版，此項免排 (正常)`,
+                hierarchy: { level: 1, type: 'text', badgeText: String(idx + 1), indent: '', cleanText: item }
+            }))
+        };
+    }
 
     // 8. 備註事項 (Rule 2 & 4: 獨立欄位隔離，List[str] 陣列與水平對齊)
     const notesDiff = alignListItems(
@@ -1904,28 +2007,78 @@ function compareSinglePair(w, p) {
         if (preDiff.status === 'yellow') hasYellow = true;
     }
 
-    // 13. 課程目標 (Rule 3: 特殊校對容錯規則：PDF 缺失視為正常，顯示 ⚪/🟡 略過，嚴禁亮紅燈！)
-    const wObj = normalizeText(w['課程目標'] || '');
-    const pObj = normalizeText(p['課程目標'] || '');
-    if (!pObj) {
+    // 13. 課程目標 (依排版模式校對)
+    if (layoutMode === 'objective' || layoutMode === 'both') {
+        const objTextToCompare = (layoutMode === 'objective' && pContentMatchesWordObj)
+            ? pContentText
+            : pObjStr;
+        const normPdfObj = normalizeText(objTextToCompare);
+
+        const wObjItems = w['課程目標_items'] || (wObjStr.includes('\n') ? wObjStr.split(/\n+/).map(s => s.trim()).filter(Boolean) : []);
+        const pObjItems = p['課程目標_items'] || (objTextToCompare.includes('\n') ? objTextToCompare.split(/\n+/).map(s => s.trim()).filter(Boolean) : []);
+
+        if (wObjItems.length > 1 || pObjItems.length > 1) {
+            const objListDiff = alignListItems(
+                wObjItems.length > 0 ? wObjItems : [wObjStr],
+                pObjItems.length > 0 ? pObjItems : [objTextToCompare],
+                '課程目標'
+            );
+            fields['課程目標'] = {
+                label: '課程目標',
+                isList: true,
+                layoutTag: 'adopted-objective',
+                word: `${wObjItems.length} 個項目`,
+                pdf: `${pObjItems.length} 個項目`,
+                wordItems: wObjItems,
+                pdfItems: pObjItems,
+                status: objListDiff.status,
+                desc: objListDiff.desc + ' (本課採「課程目標」排版)',
+                details: objListDiff.details
+            };
+            if (objListDiff.status === 'red') hasRed = true;
+            if (objListDiff.status === 'yellow') hasYellow = true;
+        } else {
+            if (wObjNorm === normPdfObj) {
+                fields['課程目標'] = {
+                    label: '課程目標',
+                    layoutTag: 'adopted-objective',
+                    word: wObjStr,
+                    pdf: objTextToCompare,
+                    status: 'green',
+                    desc: '課程目標完全相符 (本課採「課程目標」排版)'
+                };
+            } else if (calculateSimilarity(wObjNorm, normPdfObj) > 0.70 || wObjNorm.includes(normPdfObj) || normPdfObj.includes(wObjNorm)) {
+                fields['課程目標'] = {
+                    label: '課程目標',
+                    layoutTag: 'adopted-objective',
+                    word: wObjStr,
+                    pdf: objTextToCompare,
+                    status: 'yellow',
+                    desc: '課程目標文字微調 (本課採「課程目標」排版)'
+                };
+                hasYellow = true;
+            } else {
+                fields['課程目標'] = {
+                    label: '課程目標',
+                    layoutTag: 'adopted-objective',
+                    word: wObjStr,
+                    pdf: objTextToCompare,
+                    status: 'red',
+                    desc: `課程目標不一致！(本課採「課程目標」排版)`
+                };
+                hasRed = true;
+            }
+        }
+    } else {
+        // layoutMode is 'content' or 'none' -> 課程目標免排，視為正常略過！
         fields['課程目標'] = {
             label: '課程目標',
-            word: w['課程目標'] ? `${w['課程目標'].slice(0, 35)}...` : '(無)',
-            pdf: '(版面精簡未排版)',
-            status: 'gray', // ⚪ 灰色略過
-            desc: '版面精簡未排版 / 略過 (正常)'
+            layoutTag: 'skipped-content',
+            word: wObjStr ? (wObjStr.length > 40 ? `${wObjStr.slice(0, 40)}...` : wObjStr) : '(無)',
+            pdf: '(依排版規則免排)',
+            status: 'gray', // ⚪ 正常略過，嚴禁亮紅燈！
+            desc: `依版面排版規則略過 (美編採「${layoutModeText}」排版，免排課程目標，正常)`
         };
-        // Rule 3: Do NOT set hasRed or hasYellow!
-    } else {
-        if (wObj === pObj) {
-            fields['課程目標'] = { label: '課程目標', word: w['課程目標'], pdf: p['課程目標'], status: 'green', desc: '完全相符' };
-        } else if (calculateSimilarity(wObj, pObj) > 0.7) {
-            fields['課程目標'] = { label: '課程目標', word: w['課程目標'], pdf: p['課程目標'], status: 'yellow', desc: '文字微調' };
-            hasYellow = true;
-        } else {
-            fields['課程目標'] = { label: '課程目標', word: w['課程目標'], pdf: p['課程目標'], status: 'red', desc: '課程目標不一致！' };
-            hasRed = true;
-        }
     }
 
     // 14. 學會技能 (Rule 3: 特殊校對容錯規則：PDF 缺失視為正常，顯示 ⚪/🟡 略過，嚴禁亮紅燈！)
@@ -1976,7 +2129,9 @@ function compareSinglePair(w, p) {
         nameEn: finalNameEn,
         wordCourse: w,
         pdfCourse: p,
-        fields
+        fields,
+        layoutMode,
+        layoutModeText
     };
 }
 
@@ -2235,10 +2390,23 @@ function createCourseCard(item, idx) {
                 ? `<span class="mt-1 inline-block text-3xs px-2 py-0.5 rounded font-mono bg-indigo-50 text-indigo-700 border border-indigo-100 font-medium">共 ${mainItemCount} 主項 / ${subItemCount} 子項</span>`
                 : `<span class="mt-1 inline-block text-3xs px-2 py-0.5 rounded font-mono bg-slate-100 text-slate-500 font-normal">共 ${field.details.length} 項</span>`;
 
+            let tagBadgeHtml = '';
+            if (field.layoutTag) {
+                if (field.layoutTag === 'adopted-content') {
+                    tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-blue-100 text-blue-800 font-semibold">排版採用</span>`;
+                } else if (field.layoutTag === 'adopted-objective') {
+                    tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-purple-100 text-purple-800 font-semibold">排版採用</span>`;
+                } else if (field.layoutTag === 'skipped-content') {
+                    tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-slate-100 text-slate-500 font-normal">免排 (採內容)</span>`;
+                } else if (field.layoutTag === 'skipped-objective') {
+                    tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-slate-100 text-slate-500 font-normal">免排 (採目標)</span>`;
+                }
+            }
+
             rowsHtml += `
                 <tr class="border-b border-slate-100 last:border-none ${rowBg}">
                     <td class="py-3 px-4 text-xs font-semibold text-slate-700 whitespace-nowrap align-top">
-                        <div class="font-bold text-slate-800">${field.label}</div>
+                        <div class="font-bold text-slate-800 flex items-center flex-wrap gap-1">${field.label}${tagBadgeHtml}</div>
                         ${countBadgeHtml}
                     </td>
                     <td colspan="2" class="py-2.5 px-4 align-top">
@@ -2255,10 +2423,23 @@ function createCourseCard(item, idx) {
                 </tr>
             `;
         } else {
+            let tagBadgeHtml = '';
+            if (field.layoutTag) {
+                if (field.layoutTag === 'adopted-content') {
+                    tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-blue-100 text-blue-800 font-semibold">排版採用</span>`;
+                } else if (field.layoutTag === 'adopted-objective') {
+                    tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-purple-100 text-purple-800 font-semibold">排版採用</span>`;
+                } else if (field.layoutTag === 'skipped-content') {
+                    tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-slate-100 text-slate-500 font-normal">免排 (採內容)</span>`;
+                } else if (field.layoutTag === 'skipped-objective') {
+                    tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-slate-100 text-slate-500 font-normal">免排 (採目標)</span>`;
+                }
+            }
+
             rowsHtml += `
                 <tr class="border-b border-slate-100 last:border-none ${rowBg}">
                     <td class="py-3 px-4 text-xs font-semibold text-slate-700 whitespace-nowrap align-top">
-                        ${field.label}
+                        <div class="font-bold text-slate-800 flex items-center flex-wrap gap-1">${field.label}${tagBadgeHtml}</div>
                     </td>
                     <td class="py-3 px-4 text-xs text-slate-800 font-mono align-top break-words whitespace-pre-line leading-relaxed">
                         ${formatFieldValue(key, field.word, field.status === 'red')}
@@ -2322,6 +2503,36 @@ function createCourseCard(item, idx) {
     const zhNameDisplay = item.nameZh || item.name || '(未提供中文課名)';
     const enNameDisplay = item.nameEn || (item.pdfCourse && item.pdfCourse.course_name_en) || (item.wordCourse && item.wordCourse.course_name_en) || '(無英文課名/未排)';
 
+    let layoutBadgeHtml = '';
+    if (item.layoutMode === 'content') {
+        layoutBadgeHtml = `
+            <div class="flex items-center gap-1.5 pt-0.5">
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-2xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                    <svg class="w-3 h-3 mr-1 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path></svg>
+                    排版模式：以「課程內容」排版
+                </span>
+            </div>
+        `;
+    } else if (item.layoutMode === 'objective') {
+        layoutBadgeHtml = `
+            <div class="flex items-center gap-1.5 pt-0.5">
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-2xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                    <svg class="w-3 h-3 mr-1 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                    排版模式：以「課程目標」排版
+                </span>
+            </div>
+        `;
+    } else if (item.layoutMode === 'both') {
+        layoutBadgeHtml = `
+            <div class="flex items-center gap-1.5 pt-0.5">
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-2xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <svg class="w-3 h-3 mr-1 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                    排版模式：同時排入「課程目標」與「課程內容」
+                </span>
+            </div>
+        `;
+    }
+
     card.innerHTML = `
         <div class="p-5 flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-slate-100 bg-slate-50/40">
             <div class="flex items-start space-x-3.5 flex-1 min-w-0">
@@ -2349,6 +2560,8 @@ function createCourseCard(item, idx) {
                             ${enBadgeText}
                         </span>
                     </div>
+                    <!-- 排版模式指示標籤 -->
+                    ${layoutBadgeHtml}
                 </div>
             </div>
 
@@ -2405,13 +2618,14 @@ function copyErrorReport() {
     let report = `【課程資料校稿差異報告 - 待美編修正】\n`;
     report += `比對時間：${new Date().toLocaleString('zh-TW')}\n`;
     report += `來源檔案：Word [${state.wordFile ? state.wordFile.name : 'Word'}] ⇄ PDF [${state.pdfFile ? state.pdfFile.name : 'PDF'}]\n`;
-    report += `說明：依排版規則，『課程目標』與『學會技能』若因精簡版面未排入，視為正常略過；『後續推薦課程』美編依規則僅排首門，其餘未排亦視為正常。\n`;
+    report += `說明：依排版規則，本系統以美編 PDF 排版為準進行校對；課程不論以「課程目標」或「課程內容」排版皆視為正確，未排之對應欄位視為正常略過；『學會技能』因版面精簡未排亦視為正常；『後續推薦課程』美編依規則僅排首門。\n`;
     report += `--------------------------------------------------------\n\n`;
 
     if (redItems.length > 0) {
         report += `🔴 【資料不一致錯誤 (${redItems.length} 門課程)】：\n`;
         redItems.forEach((item, i) => {
-            report += `\n${i + 1}. 【${item.code}】${item.name} (頁數：${item.pdfCourse && item.pdfCourse.page ? 'P.' + item.pdfCourse.page : '未知'})\n`;
+            const layoutInfo = item.layoutModeText ? ` [排版模式：以「${item.layoutModeText}」排版]` : '';
+            report += `\n${i + 1}. 【${item.code}】${item.name} (頁數：${item.pdfCourse && item.pdfCourse.page ? 'P.' + item.pdfCourse.page : '未知'})${layoutInfo}\n`;
             for (const key of Object.keys(item.fields)) {
                 const f = item.fields[key];
                 if (f.status === 'red') {
