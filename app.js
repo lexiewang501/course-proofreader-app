@@ -614,10 +614,10 @@ async function parseDocx(buffer) {
                     if (label === '適合對象' || label === '預備知識' || label === '先修課程') {
                         const cellParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
                         const cellFull = row.slice(1).map(c => c.fullText).join(' ').trim();
-                        if (hasBulletMarkers(cellParas) || hasBulletMarkers(cellFull)) {
+                        if (hasBulletMarkers(cellParas) || hasBulletMarkers(cellFull) || cellParas.length > 1) {
                             course[label] = extractListItems(cellParas, cellFull);
                         } else {
-                            course[label] = cellParas.length > 0 ? cellParas.join('\n') : cellFull;
+                            course[label] = cellParas.length === 1 ? cellParas[0] : cellFull;
                         }
                     } else if (label === '課程內容' || label === '備註事項') {
                         const cellParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
@@ -640,8 +640,9 @@ async function parseDocx(buffer) {
                     if (!isAlreadyPopulated) {
                         const val = rowFullText.replace(new RegExp(`^${label}[：:\\s]*`), '').trim();
                         if (label === '適合對象' || label === '預備知識' || label === '先修課程') {
-                            if (hasBulletMarkers(val)) {
-                                course[label] = extractListItems([], val);
+                            const valParas = val.split(/\r?\n+/).map(s => s.trim()).filter(Boolean);
+                            if (hasBulletMarkers(val) || valParas.length > 1) {
+                                course[label] = extractListItems(valParas, val);
                             } else {
                                 course[label] = val;
                             }
@@ -919,6 +920,18 @@ async function parsePdf(buffer) {
 // List Field Extraction & Alignment Helpers
 // ==========================================
 
+/**
+ * Universal helper to normalize list or multiline string values into clean string arrays.
+ * Handles both Array and multiline String representations consistently across Word & PDF.
+ */
+function toCleanItemArray(val) {
+    if (!val) return [];
+    if (Array.isArray(val)) {
+        return val.flatMap(v => String(v).split(/\r?\n+/)).map(s => s.trim()).filter(Boolean);
+    }
+    return String(val).split(/\r?\n+/).map(s => s.trim()).filter(Boolean);
+}
+
 function cleanItemText(str) {
     if (!str) return '';
     return str.replace(/^[\s•●\-\*※\d.、()（）]+/, '').trim();
@@ -942,8 +955,18 @@ function splitOutlineItems(text) {
 /**
  * Extracts list items from Word table cell paragraphs.
  * If paragraphs contain embedded bullets or numbering, splits them cleanly.
+ * Also separates compound discount scheme headers (e.g. 課程優惠方案：接早鳥優惠價：) into distinct items.
  */
 function extractListItems(paragraphs, fullText) {
+    // Pre-process paragraphs: if a paragraph combines header like "課程優惠方案：" and a sub-clause like "早鳥優惠價：", split them
+    if (paragraphs && paragraphs.length > 0) {
+        paragraphs = paragraphs.flatMap(p => {
+            const m = p.match(/^((?:\d+[.、]\s*)?課程優惠方案[：:])\s*((?:早鳥|限時|專案|續報|學生|企業|方案)[^：:\n]{0,8}[：:][\s\S]+)$/);
+            if (m) return [m[1].trim(), m[2].trim()];
+            return [p];
+        });
+    }
+
     let items = [];
     if (paragraphs && paragraphs.length > 0) {
         for (const p of paragraphs) {
@@ -958,7 +981,12 @@ function extractListItems(paragraphs, fullText) {
         }
     }
     if (items.length === 0 && fullText && fullText.trim()) {
-        items = splitOutlineItems(fullText.trim());
+        const m = fullText.trim().match(/^((?:\d+[.、]\s*)?課程優惠方案[：:])\s*((?:早鳥|限時|專案|續報|學生|企業|方案)[^：:\n]{0,8}[：:][\s\S]+)$/);
+        if (m) {
+            items = [m[1].trim(), ...splitOutlineItems(m[2].trim())];
+        } else {
+            items = splitOutlineItems(fullText.trim());
+        }
     }
     return items.map(it => it.trim()).filter(Boolean);
 }
@@ -982,14 +1010,17 @@ function isNotesItemStart(text, currentItem) {
     const trimmed = text.trim();
     if (!trimmed) return false;
 
+    // Standalone symbol lines are not new items
+    if (/^[®™©\s]+$/.test(trimmed)) return false;
+
     // 1. Explicit numbering (e.g. 1. 2. 1、 (1) [1]) - NEVER match decimals like 1.5!
     if (/^(?:\d+[、]|\d+\.(?!\d)\s*|\(\d+\)|\[\d+\]|[①-⑩])/.test(trimmed)) return true;
 
-    // 2. Explicit bullet symbol (e.g. ● • ※ - * ·)
-    if (/^[•●※\-\*·◆▪]/.test(trimmed)) return true;
+    // 2. Explicit bullet symbol (e.g. ● • ※ - * · ＊ ★ ☆ ✦ ✧)
+    if (/^[•●※\-\*·◆▪＊★☆✦✧]/.test(trimmed)) return true;
 
     // 3. Scheme / discount / note headers ending in colon
-    if (/^(?:課程優惠方案|限時優惠|早鳥優惠|早鳥優惠價|續報優惠|學生優惠|學生專屬優惠|重聽服務|原廠優惠|證照優惠|方案\s*\d*)[：:]/.test(trimmed)) return true;
+    if (/^(?:課程優惠方案|限時優惠|早鳥優惠|早鳥優惠價|專案優惠|續報優惠|學生優惠|學生專屬優惠|重聽服務|原廠優惠|證照優惠|方案\s*\d*)[：:]/.test(trimmed)) return true;
     if (/^[^：:\n]{2,8}[：:]\s*(?:即日起|開課前|報名|原報名|續報|凡報名|參與|可享|贈送|提供|投入|完成|透過)/.test(trimmed)) return true;
 
     // If current item already started with an explicit number (e.g. "1.", "2."),
@@ -1017,6 +1048,7 @@ function assembleNotesLines(lines) {
     for (let i = 0; i < lines.length; i++) {
         const lineText = lines[i].text.trim();
         if (!lineText) continue;
+        if (/^[®™©\s]+$/.test(lineText)) continue;
 
         if (!curItem) {
             curItem = lineText;
@@ -1170,6 +1202,7 @@ function assembleLinesIntoItems(lines, isNotes = false) {
     function isNewItemStart(line, prevLine) {
         const text = line.text;
         const prevText = prevLine ? prevLine.text : '';
+        if (/^[®™©\s]+$/.test(text.trim())) return false;
 
         // 1. Explicit bullet / numbering
         if (/^\d+[.、]/.test(text)) return true;
@@ -1207,9 +1240,10 @@ function assembleLinesIntoItems(lines, isNotes = false) {
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
+        if (/^[®™©\s]+$/.test(line.text.trim())) continue;
         const prevLine = i > 0 ? lines[i - 1] : null;
 
-        if (i === 0) {
+        if (!currentItem) {
             currentItem = line.text;
         } else {
             if (isNewItemStart(line, prevLine)) {
@@ -1373,8 +1407,8 @@ function alignListItems(wItems, pItems, fieldLabel) {
         return { status: 'green', desc: `雙方皆無${fieldLabel}`, details: [] };
     }
 
-    const sortedP = sortListItems(pItems);
-    const sortedW = sortListItems(wItems);
+    const sortedP = fieldLabel === '備註事項' ? pItems : sortListItems(pItems);
+    const sortedW = fieldLabel === '備註事項' ? wItems : sortListItems(wItems);
 
     const m = sortedW.length;
     const n = sortedP.length;
@@ -2092,11 +2126,11 @@ function compareSinglePair(w, p) {
     // 10. 適合對象 (動態判定 List vs 純文字段落)
     const wTargetVal = w['適合對象'] || '';
     const pTargetVal = p['適合對象'] || '';
-    const targetIsList = hasBulletMarkers(wTargetVal) || hasBulletMarkers(pTargetVal);
+    const wTargetArr = toCleanItemArray(wTargetVal);
+    const pTargetArr = toCleanItemArray(pTargetVal);
+    const targetIsList = wTargetArr.length > 1 || pTargetArr.length > 1 || hasBulletMarkers(wTargetVal) || hasBulletMarkers(pTargetVal);
 
     if (targetIsList) {
-        const wTargetArr = Array.isArray(wTargetVal) ? wTargetVal : [wTargetVal];
-        const pTargetArr = Array.isArray(pTargetVal) ? pTargetVal : [pTargetVal];
         const targetDiff = alignListItems(wTargetArr, pTargetArr, '適合對象');
         fields['適合對象'] = {
             label: '適合對象',
@@ -2132,11 +2166,11 @@ function compareSinglePair(w, p) {
     // 11. 預備知識 (動態判定 List vs 純文字段落)
     const wPrereqVal = w['預備知識'] || '';
     const pPrereqVal = p['預備知識'] || '';
-    const prereqIsList = hasBulletMarkers(wPrereqVal) || hasBulletMarkers(pPrereqVal);
+    const wPrereqArr = toCleanItemArray(wPrereqVal);
+    const pPrereqArr = toCleanItemArray(pPrereqVal);
+    const prereqIsList = wPrereqArr.length > 1 || pPrereqArr.length > 1 || hasBulletMarkers(wPrereqVal) || hasBulletMarkers(pPrereqVal);
 
     if (prereqIsList) {
-        const wPrereqArr = Array.isArray(wPrereqVal) ? wPrereqVal : [wPrereqVal];
-        const pPrereqArr = Array.isArray(pPrereqVal) ? pPrereqVal : [pPrereqVal];
         const prereqDiff = alignListItems(wPrereqArr, pPrereqArr, '預備知識');
         fields['預備知識'] = {
             label: '預備知識',
@@ -2173,10 +2207,10 @@ function compareSinglePair(w, p) {
     if ((w['先修課程'] && w['先修課程'].length > 0) || (p['先修課程'] && p['先修課程'].length > 0)) {
         const wPreVal = w['先修課程'] || '';
         const pPreVal = p['先修課程'] || '';
-        const preIsList = hasBulletMarkers(wPreVal) || hasBulletMarkers(pPreVal);
+        const wPreArr = toCleanItemArray(wPreVal);
+        const pPreArr = toCleanItemArray(pPreVal);
+        const preIsList = wPreArr.length > 1 || pPreArr.length > 1 || hasBulletMarkers(wPreVal) || hasBulletMarkers(pPreVal);
         if (preIsList) {
-            const wPreArr = Array.isArray(wPreVal) ? wPreVal : [wPreVal];
-            const pPreArr = Array.isArray(pPreVal) ? pPreVal : [pPreVal];
             const preDiff = alignListItems(wPreArr, pPreArr, '先修課程');
             fields['先修課程'] = {
                 label: '先修課程',
