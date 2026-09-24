@@ -63,6 +63,7 @@ const elements = {
     btnStartCompare: document.getElementById('btnStartCompare'),
     btnSampleBlockchain: document.getElementById('btnSampleBlockchain'),
     btnSampleJianzhen: document.getElementById('btnSampleJianzhen'),
+    btnSampleComptia: document.getElementById('btnSampleComptia'),
 
     loadingIndicator: document.getElementById('loadingIndicator'),
     loadingText: document.getElementById('loadingText'),
@@ -106,6 +107,9 @@ function setupUploadHandlers() {
 
     elements.btnSampleBlockchain.addEventListener('click', () => loadSample('blockchain'));
     elements.btnSampleJianzhen.addEventListener('click', () => loadSample('jianzhen'));
+    if (elements.btnSampleComptia) {
+        elements.btnSampleComptia.addEventListener('click', () => loadSample('comptia'));
+    }
     elements.btnStartCompare.addEventListener('click', runComparison);
 }
 
@@ -209,14 +213,25 @@ function checkReadyToCompare() {
         setTimeout(() => elements.btnStartCompare.classList.remove('animate-pulse'), 1500);
     }
 }
-
 async function loadSample(type) {
-    const wordPath = type === 'blockchain' ? '恆逸_區塊鏈_2027年1-6月課程.docx' : '恆逸_鑒真數位_2027年1-6月課程v1_1.docx';
-    const pdfPath = type === 'blockchain' ? '區塊鏈.pdf' : '鑒真數位.pdf';
+    let wordPath, pdfPath, labelName;
+    if (type === 'blockchain') {
+        wordPath = '恆逸_區塊鏈_2027年1-6月課程.docx';
+        pdfPath = '區塊鏈.pdf';
+        labelName = '區塊鏈';
+    } else if (type === 'jianzhen') {
+        wordPath = '恆逸_鑒真數位_2027年1-6月課程v1_1.docx';
+        pdfPath = '鑒真數位.pdf';
+        labelName = '鑒真數位';
+    } else {
+        wordPath = '恆逸_CompTIA_2027年1-6月課程.docx';
+        pdfPath = 'CompTIA.pdf';
+        labelName = 'CompTIA';
+    }
 
     try {
         elements.loadingIndicator.classList.remove('hidden');
-        elements.loadingText.textContent = `正在讀取本地測試檔案 (${type === 'blockchain' ? '區塊鏈' : '鑒真數位'})...`;
+        elements.loadingText.textContent = `正在讀取本地測試檔案 (${labelName})...`;
 
         const [wordRes, pdfRes] = await Promise.all([
             fetch(encodeURIComponent(wordPath)),
@@ -2081,29 +2096,14 @@ function compareSinglePair(w, p) {
         };
     }
 
-    // 14. 學會技能 (Rule 3: 特殊校對容錯規則：PDF 缺失視為正常，顯示 ⚪/🟡 略過，嚴禁亮紅燈！)
-    const wSkill = normalizeText(w['學會技能'] || '');
-    const pSkill = normalizeText(p['學會技能'] || '');
-    if (!pSkill) {
-        fields['學會技能'] = {
-            label: '學會技能',
-            word: w['學會技能'] ? `${w['學會技能'].slice(0, 35)}...` : '(無)',
-            pdf: '(版面精簡未排版)',
-            status: 'gray', // ⚪ 灰色略過
-            desc: '版面精簡未排版 / 略過 (正常)'
-        };
-        // Rule 3: Do NOT set hasRed or hasYellow!
-    } else {
-        if (wSkill === pSkill) {
-            fields['學會技能'] = { label: '學會技能', word: w['學會技能'], pdf: p['學會技能'], status: 'green', desc: '完全相符' };
-        } else if (calculateSimilarity(wSkill, pSkill) > 0.7) {
-            fields['學會技能'] = { label: '學會技能', word: w['學會技能'], pdf: p['學會技能'], status: 'yellow', desc: '文字微調' };
-            hasYellow = true;
-        } else {
-            fields['學會技能'] = { label: '學會技能', word: w['學會技能'], pdf: p['學會技能'], status: 'red', desc: '學會技能不一致！' };
-            hasRed = true;
-        }
-    }
+    // 14. 學會技能 (業務規則：學會技能一律免排入 PDF，不用列出對比，僅需於表尾備註，視為正常略過)
+    fields['學會技能'] = {
+        label: '學會技能',
+        word: w['學會技能'] ? `${w['學會技能'].slice(0, 35)}...` : '(無)',
+        pdf: '(版面精簡未排版)',
+        status: 'gray', // ⚪ 灰色略過，依規則免排
+        desc: '版面精簡未排版 / 依規則免排 (正常)'
+    };
 
     // Overall Status
     let overallStatus = 'green';
@@ -2262,29 +2262,35 @@ function createCourseCard(item, idx) {
 
     const pdfPage = item.pdfCourse && item.pdfCourse.page ? `PDF 第 ${item.pdfCourse.page} 頁` : '';
 
-    // Render all fields in exact order
+    // Render all fields in exact order (從課程代碼、中英文課名、時數費用點數、課程目標/內容...直到推薦課程)
     const fieldsOrder = [
+        '課程代碼',
         '中文課名',
         '英文課名',
-        '課程代碼',
         '時數',
-        '點數',
         '費用',
+        '點數',
         '教材',
-        '課程內容',
-        '備註事項',
-        '後續推薦課程',
-        '適合對象',
-        '預備知識',
-        '先修課程',
         '課程目標',
-        '學會技能'
+        '課程內容',
+        '適合對象',
+        '先修課程',
+        '預備知識',
+        '備註事項',
+        '後續推薦課程'
     ];
 
     let rowsHtml = '';
 
     for (const key of fieldsOrder) {
-        const field = item.fields[key];
+        // 1. 學會技能依規則免排，不列入對比列（改於表尾備註說明）
+        if (key === '學會技能') continue;
+
+        // 2. 課程目標 vs 課程內容 依排版模式條件式隱藏
+        if (key === '課程內容' && item.layoutMode === 'objective') continue;
+        if (key === '課程目標' && item.layoutMode === 'content') continue;
+
+        const field = item.fields[key] || (key === '中文課名' ? item.fields['課程名稱'] : (key === '英文課名' ? item.fields['英文名稱'] : null));
         if (!field) continue;
 
         let rowBg = '';
@@ -2533,6 +2539,29 @@ function createCourseCard(item, idx) {
         `;
     }
 
+    let omittedLayoutNote = '';
+    if (item.layoutMode === 'content') {
+        omittedLayoutNote = `<p>• <strong>課程目標 / 內容</strong>：本課程美編採<strong>「課程內容」</strong>排版，Word 原稿之「課程目標」依規則免排入 PDF，故已自動隱藏課程目標對比列（視為正常）。</p>`;
+    } else if (item.layoutMode === 'objective') {
+        omittedLayoutNote = `<p>• <strong>課程目標 / 內容</strong>：本課程美編採<strong>「課程目標」</strong>排版，Word 原稿之「課程內容」依規則免排入 PDF，故已自動隱藏課程內容對比列（視為正常）。</p>`;
+    } else if (item.layoutMode === 'both') {
+        omittedLayoutNote = `<p>• <strong>課程目標 / 內容</strong>：本課程美編版面同時排入<strong>「課程目標」</strong>與<strong>「課程內容」</strong>，上方皆已完整對比。</p>`;
+    }
+
+    const tableNotesHtml = `
+        <div class="px-5 py-3.5 bg-slate-50/80 border-t border-slate-200/80 flex items-start text-xs text-slate-600 gap-2.5 leading-relaxed">
+            <svg class="w-4 h-4 text-slate-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <div class="space-y-1">
+                <div><strong class="text-slate-700">排版與校對規則備註：</strong></div>
+                <div class="text-3xs text-slate-500 space-y-0.5">
+                    ${omittedLayoutNote}
+                    <p>• <strong>學會技能</strong>：因宣傳品版面精簡，依規則一律免排入 PDF，故不列入上方對比列（視為正常）。</p>
+                    <p>• <strong>後續推薦課程</strong>：美編依版面限制僅排入首門推薦課程，只要第一門相符即判定通過（其餘免排視為正常）。</p>
+                </div>
+            </div>
+        </div>
+    `;
+
     card.innerHTML = `
         <div class="p-5 flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-slate-100 bg-slate-50/40">
             <div class="flex items-start space-x-3.5 flex-1 min-w-0">
@@ -2589,6 +2618,7 @@ function createCourseCard(item, idx) {
                 </tbody>
             </table>
         </div>
+        ${tableNotesHtml}
     `;
 
     return card;
@@ -2596,7 +2626,7 @@ function createCourseCard(item, idx) {
 
 function formatFieldValue(field, val, isError) {
     if (!val) return '<span class="text-slate-300">-</span>';
-    if (isError && (field === '時數' || field === '點數' || field === '費用' || field === '中文課名' || field === '英文課名' || field === '課程名稱' || field === '英文名稱')) {
+    if (isError && (field === '時數' || field === '點數' || field === '費用' || field === '中文課名' || field === '英文課名' || field === '課程名稱' || field === '英文名稱' || field === '課程代碼')) {
         return `<span class="diff-val-error">${val}</span>`;
     }
     return val;
@@ -2626,21 +2656,37 @@ function copyErrorReport() {
         redItems.forEach((item, i) => {
             const layoutInfo = item.layoutModeText ? ` [排版模式：以「${item.layoutModeText}」排版]` : '';
             report += `\n${i + 1}. 【${item.code}】${item.name} (頁數：${item.pdfCourse && item.pdfCourse.page ? 'P.' + item.pdfCourse.page : '未知'})${layoutInfo}\n`;
-            for (const key of Object.keys(item.fields)) {
-                const f = item.fields[key];
-                if (f.status === 'red') {
-                    if (key === '課程名稱' && item.fields['中文課名']) continue;
-                    if (key === '英文名稱' && item.fields['英文課名']) continue;
-                    if (f.isList && f.details) {
-                        report += `   - ${f.label}：${f.desc}\n`;
-                        const errDetails = f.details.filter(d => d.status === 'red');
-                        errDetails.forEach(d => {
-                            const badge = d.hierarchy ? (d.hierarchy.level >= 2 ? `子項 ${d.hierarchy.badgeText}` : `第 ${d.hierarchy.badgeText || d.index} 項`) : `第 ${d.index} 項`;
-                            report += `     • [${badge}] Word「${d.word || '無'}」⇄ PDF「${d.pdf || '漏排'}」➔ ${d.desc}\n`;
-                        });
-                    } else {
-                        report += `   - ${f.label}：Word 原稿寫「${f.word}」，但 PDF 排版為「${f.pdf}」 ➔ ${f.desc}\n`;
-                    }
+            const reportFieldsOrder = [
+                '課程代碼',
+                '中文課名',
+                '英文課名',
+                '時數',
+                '費用',
+                '點數',
+                '教材',
+                '課程目標',
+                '課程內容',
+                '適合對象',
+                '先修課程',
+                '預備知識',
+                '備註事項',
+                '後續推薦課程'
+            ];
+            for (const key of reportFieldsOrder) {
+                if (key === '學會技能') continue;
+                if (key === '課程內容' && item.layoutMode === 'objective') continue;
+                if (key === '課程目標' && item.layoutMode === 'content') continue;
+                const f = item.fields[key] || (key === '中文課名' ? item.fields['課程名稱'] : (key === '英文課名' ? item.fields['英文名稱'] : null));
+                if (!f || f.status !== 'red') continue;
+                if (f.isList && f.details) {
+                    report += `   - ${f.label}：${f.desc}\n`;
+                    const errDetails = f.details.filter(d => d.status === 'red');
+                    errDetails.forEach(d => {
+                        const badge = d.hierarchy ? (d.hierarchy.level >= 2 ? `子項 ${d.hierarchy.badgeText}` : `第 ${d.hierarchy.badgeText || d.index} 項`) : `第 ${d.index} 項`;
+                        report += `     • [${badge}] Word「${d.word || '無'}」⇄ PDF「${d.pdf || '漏排'}」➔ ${d.desc}\n`;
+                    });
+                } else {
+                    report += `   - ${f.label}：Word 原稿寫「${f.word}」，但 PDF 排版為「${f.pdf}」 ➔ ${f.desc}\n`;
                 }
             }
         });
@@ -2686,21 +2732,21 @@ function exportCSVReport() {
         'PDF英文課名',
         '英文課名比對',
         '比對狀態',
+        '排版模式',
         'Word時數',
         'PDF時數',
-        'Word點數',
-        'PDF點數',
         'Word費用',
         'PDF費用',
+        'Word點數',
+        'PDF點數',
         '教材比對',
+        '課程目標比對',
         '課程內容比對',
+        '適合對象比對',
+        '先修課程比對',
+        '預備知識比對',
         '備註事項比對',
         '後續推薦課程比對',
-        '適合對象比對',
-        '預備知識比對',
-        '先修課程比對',
-        '課程目標比對',
-        '學會技能比對',
         'PDF頁碼',
         '差異說明'
     ];
@@ -2713,6 +2759,9 @@ function exportCSVReport() {
             if (fields[k].status === 'red') {
                 if (k === '課程名稱' && fields['中文課名']) continue;
                 if (k === '英文名稱' && fields['英文課名']) continue;
+                if (k === '學會技能') continue;
+                if (k === '課程內容' && c.layoutMode === 'objective') continue;
+                if (k === '課程目標' && c.layoutMode === 'content') continue;
                 errDescs.push(`${fields[k].label}:${fields[k].desc}`);
             }
         }
@@ -2729,21 +2778,21 @@ function exportCSVReport() {
             `"${(enF.pdf || '').replace(/"/g, '""')}"`,
             enF.desc || '',
             c.status === 'green' ? '相符' : c.status === 'red' ? '錯誤' : c.status === 'yellow' ? '提醒' : '遺漏',
+            c.layoutModeText || '',
             fields['時數'] ? fields['時數'].word : '',
             fields['時數'] ? fields['時數'].pdf : '',
-            fields['點數'] ? fields['點數'].word : '',
-            fields['點數'] ? fields['點數'].pdf : '',
             fields['費用'] ? fields['費用'].word : '',
             fields['費用'] ? fields['費用'].pdf : '',
+            fields['點數'] ? fields['點數'].word : '',
+            fields['點數'] ? fields['點數'].pdf : '',
             fields['教材'] ? fields['教材'].desc : '',
+            fields['課程目標'] ? fields['課程目標'].desc : '',
             fields['課程內容'] ? fields['課程內容'].desc : '',
+            fields['適合對象'] ? fields['適合對象'].desc : '',
+            fields['先修課程'] ? fields['先修課程'].desc : '',
+            fields['預備知識'] ? fields['預備知識'].desc : '',
             fields['備註事項'] ? fields['備註事項'].desc : '',
             fields['後續推薦課程'] ? fields['後續推薦課程'].desc : '',
-            fields['適合對象'] ? fields['適合對象'].desc : '',
-            fields['預備知識'] ? fields['預備知識'].desc : '',
-            fields['先修課程'] ? fields['先修課程'].desc : '',
-            fields['課程目標'] ? fields['課程目標'].desc : '',
-            fields['學會技能'] ? fields['學會技能'].desc : '',
             c.pdfCourse && c.pdfCourse.page ? c.pdfCourse.page : '',
             `"${errDescs.join('; ').replace(/"/g, '""')}"`
         ]);
