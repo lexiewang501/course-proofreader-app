@@ -893,14 +893,16 @@ async function parsePdf(buffer) {
                     course['後續推薦課程'] = splitRecommendedCourses(fullText);
                 } else if (sec.label === '課程目標') {
                     const lines = groupItemsIntoVisualLines(secItems);
-                    course['課程目標'] = lines.map(l => l.text).join('\n');
+                    const assembled = assembleLinesIntoItems(lines, false);
+                    course['課程目標'] = assembled.join('\n');
                 } else if (sec.label === '適合對象' || sec.label === '預備知識' || sec.label === '先修課程') {
                     const lines = groupItemsIntoVisualLines(secItems);
                     const lineTexts = lines.map(l => l.text);
                     if (hasBulletMarkers(lineTexts)) {
                         course[sec.label] = extractListFromPdfSection(secItems, false);
                     } else {
-                        course[sec.label] = lineTexts.join('\n');
+                        const assembled = assembleLinesIntoItems(lines, false);
+                        course[sec.label] = assembled.length > 1 ? assembled : (assembled[0] || '');
                     }
                 } else {
                     // Strictly isolate 學會技能, etc.
@@ -1250,7 +1252,8 @@ function assembleLinesIntoItems(lines, isNotes = false) {
                 if (currentItem) items.push(currentItem.trim());
                 currentItem = line.text;
             } else {
-                currentItem += ' ' + line.text;
+                const needSpace = /[a-zA-Z0-9]$/.test(currentItem) && /^[a-zA-Z0-9]/.test(line.text);
+                currentItem += (needSpace ? ' ' : '') + line.text;
             }
         }
     }
@@ -1934,7 +1937,15 @@ function compareSinglePair(w, p) {
         layoutMode = 'both';
         layoutModeText = '課程目標與課程內容';
     } else if (hasPObjective && !hasPContent) {
-        if (pObjMatchesWordContent) {
+        // PDF 標題為課程目標。以 PDF 排版結果為準校對 Word；若 Word 也有課程目標，排版模式為「課程目標」
+        const pObjMatchesWordObj = hasPObjective && wObjNorm && (
+            calculateSimilarity(pObjNorm, wObjNorm) > 0.40 ||
+            wObjNorm.includes(pObjNorm) || pObjNorm.includes(wObjNorm)
+        );
+        if (pObjMatchesWordObj || !wContentArr.length || Boolean(wObjNorm)) {
+            layoutMode = 'objective';
+            layoutModeText = '課程目標';
+        } else if (pObjMatchesWordContent) {
             layoutMode = 'content';
             layoutModeText = '課程內容 (PDF標為目標)';
         } else {
