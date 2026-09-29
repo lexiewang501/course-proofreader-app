@@ -1485,6 +1485,56 @@ function alignListItems(wItems, pItems, fieldLabel) {
         }
     }
 
+    // Consolidate N:1 and 1:N compound list items across contiguous blocks
+    // Resolves cases where multiple Word paragraphs correspond to a single PDF item (e.g. iPASSE, GPTEH)
+    // or one Word item corresponds to multiple PDF lines (e.g. PMP001)
+    const consolidated = [];
+    let cIdx = 0;
+    while (cIdx < aligned.length) {
+        let end = cIdx;
+        let wCount = 0, pCount = 0;
+        const wTexts = [], pTexts = [];
+
+        while (end < aligned.length) {
+            const cur = aligned[end];
+            if (cur.word) { wCount++; wTexts.push(cur.word); }
+            if (cur.pdf) { pCount++; pTexts.push(cur.pdf); }
+
+            if (wCount >= 2 && pCount >= 2) break;
+
+            end++;
+            if ((wCount >= 2 && pCount === 1) || (wCount === 1 && pCount >= 2)) {
+                const combinedW = wTexts.map(w => cleanItemText(w)).join(' ');
+                const combinedP = pTexts.map(p => cleanItemText(p)).join(' ');
+                const wNorm = normalizeText(combinedW);
+                const pNorm = normalizeText(combinedP);
+                const sim = calculateSimilarity(wNorm, pNorm);
+
+                if (wCount >= 2 && pCount === 1 && end < aligned.length && aligned[end].word && !aligned[end].pdf) {
+                    continue;
+                }
+                if (wCount === 1 && pCount >= 2 && end < aligned.length && !aligned[end].word && aligned[end].pdf) {
+                    continue;
+                }
+
+                if (sim >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm)) {
+                    consolidated.push({
+                        word: wTexts.join('\n'),
+                        pdf: pTexts.join('\n')
+                    });
+                    cIdx = end;
+                    wCount = -1;
+                    break;
+                }
+            }
+        }
+
+        if (wCount !== -1) {
+            consolidated.push(aligned[cIdx]);
+            cIdx++;
+        }
+    }
+
     const details = [];
     let matchCount = 0;
     let hasRed = false;
@@ -1494,10 +1544,10 @@ function alignListItems(wItems, pItems, fieldLabel) {
     let mainCount = 0;
     let subCount = 0;
 
-    aligned.forEach((pair, idx) => {
+    consolidated.forEach((pair, idx) => {
         const w = pair.word;
         const p = pair.pdf;
-        const sampleText = w || p || '';
+        const sampleText = (p && /^\d+[.、]/.test(p.trim())) ? p : (w || p || '');
         const h = analyzeItemHierarchy(sampleText, prevH, fieldLabel);
 
         if (h.type === 'number') {
@@ -1548,13 +1598,18 @@ function alignListItems(wItems, pItems, fieldLabel) {
     });
 
     let overallStatus = 'green';
-    let overallDesc = `${fieldLabel}相符 (${sortedW.length} 項)`;
+    let overallDesc = `${fieldLabel}相符 (${consolidated.length} 項)`;
     if (hasRed) {
         overallStatus = 'red';
         overallDesc = `${fieldLabel}內容有缺漏或不符 (Word: ${sortedW.length}項, PDF: ${sortedP.length}項)`;
     } else if (hasYellow) {
         overallStatus = 'yellow';
-        overallDesc = `${fieldLabel}文字有微差或多排 (Word: ${sortedW.length}項, PDF: ${sortedP.length}項)`;
+        const hasMissingOrExtra = consolidated.some(c => !c.word || !c.pdf);
+        if (hasMissingOrExtra) {
+            overallDesc = `${fieldLabel}文字有微差或增減 (Word: ${sortedW.length}項, PDF: ${sortedP.length}項)`;
+        } else {
+            overallDesc = `${fieldLabel}文字有微差 (共 ${consolidated.length} 項)`;
+        }
     }
 
     return {
