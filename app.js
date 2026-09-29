@@ -302,7 +302,7 @@ function extractCourseIdentityFromWord(rows, course) {
     }
 
     // 1. Check for parentheses containing English name: (Azure Fundamentals) or （Blockchain Developer Course）
-    const parenMatch = rawTitle.match(/[(（]([A-Za-z0-9\s,&.:()/'"-]{4,})[)）]/);
+    const parenMatch = rawTitle.match(/[(（]([A-Za-z0-9\s,&.:()/'"+\u00a0–—®™©：；，／－-]{4,})[)）]/);
     if (parenMatch) {
         if (!rawEnTitle) {
             rawEnTitle = parenMatch[1].trim();
@@ -317,7 +317,7 @@ function extractCourseIdentityFromWord(rows, course) {
         for (const line of lines) {
             if (/[\u4e00-\u9fa5]/.test(line)) {
                 zhLines.push(line);
-            } else if (!rawEnTitle && /^[A-Za-z0-9\s,&.:()/'"-]{3,}$/.test(line)) {
+            } else if (!rawEnTitle && /^[A-Za-z0-9\s,&.:()/'"+\u00a0–—®™©：；，（）／－-]{3,}$/.test(line)) {
                 rawEnTitle = line;
             }
         }
@@ -457,7 +457,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
 
     // English subtitle lines (must not contain Chinese characters)
     for (const l of candidateLines) {
-        if (!/[\u4e00-\u9fa5]/.test(l.lineText) && /^[A-Za-z0-9\s,&.:()/'"+\u00a0–—®™©-]{3,}$/.test(l.lineText)) {
+        if (!/[\u4e00-\u9fa5]/.test(l.lineText) && /^[A-Za-z0-9\s,&.:()/'"+\u00a0–—®™©：；，（）／－-]{3,}$/.test(l.lineText)) {
             enLines.push(l.lineText);
         }
     }
@@ -479,7 +479,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
     }
 
     if (!enTitle) {
-        const parenMatch = zhTitle.match(/[(（]([A-Za-z0-9\s,&.:()/'"-]{4,})[)）]/);
+        const parenMatch = zhTitle.match(/[(（]([A-Za-z0-9\s,&.:()/'"+\u00a0–—®™©：；，／－-]{4,})[)）]/);
         if (parenMatch) {
             enTitle = parenMatch[1].trim();
             zhTitle = zhTitle.replace(parenMatch[0], ' ').trim();
@@ -597,19 +597,26 @@ async function parseDocx(buffer) {
             const rowFullText = row.map(c => c.fullText).join(' ').replace(/\s+/g, ' ').trim();
             const firstCellText = row[0] ? row[0].fullText.trim() : '';
 
-            // Metadata row
-            if (rowFullText.includes('時數') || rowFullText.includes('費用') || rowFullText.includes('點數')) {
+            // Metadata row: only parse if not a known label row (防止備註事項等區塊誤認)
+            const isLabelRow = KNOWN_LABELS.some(l => firstCellText === l || firstCellText.startsWith(l));
+            if (!isLabelRow && (rowFullText.includes('時數') || rowFullText.includes('費用') || rowFullText.includes('點數'))) {
                 const hoursMatch = rowFullText.match(/時數[：:\s]*([0-9.]+)\s*小時?/);
-                if (hoursMatch) course['時數'] = hoursMatch[1];
+                if (hoursMatch && !course['時數']) course['時數'] = hoursMatch[1];
 
                 const priceMatch = rowFullText.match(/費用[：:\s]*([0-9,]+)\s*元?/);
-                if (priceMatch) course['費用'] = priceMatch[1].replace(/,/g, '');
+                if (priceMatch && !course['費用']) course['費用'] = priceMatch[1].replace(/,/g, '');
 
                 const pointsMatch = rowFullText.match(/點數[：:\s]*([0-9.]+)\s*點?/);
-                if (pointsMatch) course['點數'] = pointsMatch[1];
+                if (pointsMatch && !course['點數']) course['點數'] = pointsMatch[1];
 
-                const matMatch = rowFullText.match(/教材[：:\s]*([^|｜\n]+)/);
-                if (matMatch) course['教材'] = matMatch[1].trim();
+                const matCell = row.find(c => /(?:^|[\s|｜])教材[：:\s]/.test(c.fullText));
+                if (matCell && !course['教材']) {
+                    const m = matCell.fullText.match(/(?:^|[\s|｜])教材[：:\s]+([^|｜\n]+)/);
+                    if (m) course['教材'] = m[1].trim();
+                } else if (!course['教材']) {
+                    const matMatch = rowFullText.match(/(?:^|[\s|｜])教材[：:\s]+([^|｜\n]+)/);
+                    if (matMatch) course['教材'] = matMatch[1].trim();
+                }
             }
 
             // Check known section labels
