@@ -362,10 +362,10 @@ function extractCourseIdentityFromWord(rows, course) {
  * Filters out breadcrumbs / category tabs (e.g. "CompTIA SecAI+ 認證", "此課程為...證照") located above the title banner.
  */
 function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
-    // 1. In promotional flyers, the course title banner is strictly located within metaY + 4 to metaY + 46.
-    // Breadcrumbs (y >= metaY + 48) and page headers (y > metaY + 60) reside above.
+    // 1. In promotional flyers, the course title banner is located below courseTop and within metaY + 80 headroom
+    // for multi-line titles (e.g. 2-line Chinese titles like SEMGEI).
     // Out-of-table elements such as side tab markers (x < 35) are strictly excluded.
-    const maxHeaderY = Math.min(courseTop, metaY + 46);
+    const maxHeaderY = Math.min(courseTop, metaY + 80);
     let validItems = headerItems.filter(it => (it.x < 95 ? (it.x >= 35 && it.y >= metaY - 5) : it.y > metaY + 3) && it.y <= maxHeaderY);
 
     // Merge superscript symbols (® / ™ / ©) into the preceding word/acronym
@@ -411,8 +411,9 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         const lineMaxH = Math.max(...line.map(it => it.h || 0));
 
         // 1. Identify left-side course code badge inside table bounds (35 <= x < 95)
-        // Strictly exclude external margin tabs (e.g. EPI, PMI, CompTIA)
-        const leftBadge = line.find(it => it.x >= 35 && it.x < 95 && /^[A-Za-z0-9_-]{2,10}$/.test(it.str) && !['EPI', 'PMI', 'CompTIA'].includes(it.str));
+        // Strictly exclude external margin tabs (e.g. EPI, PMI, CompTIA), 4-digit years (2026/2027),
+        // accreditation badges (PDU, CPE, OCP, ACP), and small font badges (h < 9)
+        const leftBadge = line.find(it => it.x >= 35 && it.x < 95 && (it.h || 0) >= 9 && /^[A-Za-z0-9_-]{2,10}$/.test(it.str) && !/^[12]\d{3}$/.test(it.str) && !['EPI', 'PMI', 'CompTIA', 'PDU', 'CPE', 'OCP', 'ACP'].includes(it.str));
         if (leftBadge && !code) {
             code = leftBadge.str;
         }
@@ -430,8 +431,16 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
             lineText === 'EPI' ||
             lineText === 'PMI' ||
             lineText.includes('認可之資通安全專業證照') ||
-            // Breadcrumbs like "CompTIA SecAI+ 認證" with small font (h <= 10)
-            ((lineText.endsWith('認證') || lineText.endsWith('證照')) && lineMaxH <= 10)
+            // Promotional & accreditation badges with small font (lineMaxH <= 10)
+            (lineMaxH <= 10 && (
+                lineText.includes('認證') || 
+                lineText.includes('證照') ||
+                lineText.includes('學分') ||
+                lineText.includes('積分') ||
+                lineText.includes('新課') ||
+                lineText.includes('獨家') ||
+                /^[12]\d{3}$/.test(lineText)
+            ))
         ) {
             continue;
         }
@@ -701,6 +710,7 @@ async function parsePdf(buffer) {
         const items = textContent.items.map(it => ({
             x: Math.round(it.transform[4]),
             y: Math.round(it.transform[5]),
+            h: Math.round((it.height || 0) * 10) / 10,
             str: it.str.trim()
         })).filter(it => it.str.length > 0 && it.x >= 35 && it.x < 565);
 
