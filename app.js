@@ -29,6 +29,9 @@ const LIST_FIELDS = new Set([
     '先修課程'
 ]);
 
+// Universal outline numbering & bullet patterns (Chinese & Arabic numbers, bullets, brackets, outline headers)
+const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、.．]|\d+\.(?!\d)|[【\[]\d+[】\]]|[•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z][.、)）])/i;
+
 // Global Application State
 const state = {
     wordFile: null,
@@ -956,7 +959,7 @@ function cleanItemText(str) {
  */
 function splitOutlineItems(text) {
     if (!text) return [];
-    const parts = text.split(/(?=\b\d+[.、]|\s*[•●※]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+)/);
+    const parts = text.split(/(?=\b\d+[.、]|\s*[•●※·◆▪＊★☆✦✧]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
     const res = [];
     for (const p of parts) {
         const trimmed = p.trim();
@@ -1010,8 +1013,7 @@ function extractListItems(paragraphs, fullText) {
 function hasBulletMarkers(val) {
     if (!val) return false;
     const arr = Array.isArray(val) ? val : [val];
-    const bulletPattern = /^\s*(?:\d+[、]|(?:\d+)\.(?!\d)\s*|\(\d+\)|\[\d+\]|[①-⑩]|[•●※·◆▪]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter)\s*\d+)/i;
-    return arr.some(s => bulletPattern.test((s || '').trim()));
+    return arr.some(s => BULLET_ITEM_PATTERN.test((s || '').trim()));
 }
 
 /**
@@ -1026,20 +1028,16 @@ function isNotesItemStart(text, currentItem) {
     // Standalone symbol lines are not new items
     if (/^[®™©\s]+$/.test(trimmed)) return false;
 
-    // 1. Explicit numbering (e.g. 1. 2. 1、 (1) [1]) - NEVER match decimals like 1.5!
-    if (/^(?:\d+[、]|\d+\.(?!\d)\s*|\(\d+\)|\[\d+\]|[①-⑩])/.test(trimmed)) return true;
+    // 1. Explicit numbering / bullets (Chinese & Arabic & symbols)
+    if (BULLET_ITEM_PATTERN.test(trimmed)) return true;
 
-    // 2. Explicit bullet symbol (e.g. ● • ※ - * · ＊ ★ ☆ ✦ ✧)
-    if (/^[•●※·◆▪＊★☆✦✧]/.test(trimmed)) return true;
-    if (/^[-*](?:\s+|$)/.test(trimmed)) return true;
-
-    // 3. Scheme / discount / note headers ending in colon
+    // 2. Scheme / discount / note headers ending in colon
     if (/^(?:課程優惠方案|限時優惠|早鳥優惠|早鳥優惠價|專案優惠|續報優惠|學生優惠|學生專屬優惠|重聽服務|原廠優惠|證照優惠|方案\s*\d*)[：:]/.test(trimmed)) return true;
     if (/^[^：:\n]{2,8}[：:]\s*(?:即日起|開課前|報名|原報名|續報|凡報名|參與|可享|贈送|提供|投入|完成|透過)/.test(trimmed)) return true;
 
     // If current item already started with an explicit number (e.g. "1.", "2."),
     // do NOT split on regular text lines! Only split on a new number or bullet!
-    if (currentItem && /^\s*(?:\d+[、]|\d+\.(?!\d)|\(\d+\)|\[\d+\])/.test(currentItem.trim())) {
+    if (currentItem && BULLET_ITEM_PATTERN.test(currentItem.trim())) {
         return false;
     }
 
@@ -1096,13 +1094,7 @@ function getColumnSplits(secItems) {
     if (!secItems || secItems.length === 0) return [];
     
     // 1. Identify true bullet / item markers at the start of a column/line
-    // Hyphen / asterisk MUST be followed by whitespace or be standalone, NEVER hyphenated words like -Series or -DataFrame
-    const bullets = secItems.filter(it => 
-        /^(?:\d+[、]|(?:\d+)\.(?!\d)\s*|\(\d+\)|\[\d+\]|[①-⑩])/.test(it.str) || 
-        /^[•●※·◆▪]/.test(it.str) ||
-        /^[-*](?:\s+|$)/.test(it.str) ||
-        /^Lesson\s*\d+/i.test(it.str)
-    );
+    const bullets = secItems.filter(it => BULLET_ITEM_PATTERN.test(it.str.trim()));
 
     if (bullets.length >= 2) {
         const bulletXs = bullets.map(b => b.x).sort((a, b) => a - b);
@@ -1230,11 +1222,8 @@ function assembleLinesIntoItems(lines, isNotes = false) {
         const prevText = prevLine ? prevLine.text : '';
         if (/^[®™©\s]+$/.test(text.trim())) return false;
 
-        // 1. Explicit bullet / numbering
-        if (/^\d+[.、]/.test(text)) return true;
-        if (/^[•●※·◆▪]/.test(text)) return true;
-        if (/^[-*](?:\s+|$)/.test(text)) return true;
-        if (/^(?:Lesson|Module|Chapter|Unit|Section|Topic)\s*\d+/i.test(text)) return true;
+        // 1. Explicit bullet / numbering (Chinese, Arabic, circled, symbols, outline headers)
+        if (BULLET_ITEM_PATTERN.test(text.trim())) return true;
 
         // 2. Colon headers (e.g. 課程優惠方案：, 限時優惠：, 續報優惠：, 學生優惠價：, 重聽服務：, 實務應用：)
         if (/^[^：:\n]{2,8}[：:]/.test(text)) return true;
