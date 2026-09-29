@@ -302,7 +302,7 @@ function extractCourseIdentityFromWord(rows, course) {
     }
 
     // 1. Check for parentheses containing English name: (Azure Fundamentals) or （Blockchain Developer Course）
-    const parenMatch = rawTitle.match(/[(（]([A-Za-z0-9\s,&.:()/'"+\u00a0–—®™©：；，／－-]{4,})[)）]/);
+    const parenMatch = rawTitle.match(/[(（]([^)）\u4e00-\u9fa5]*[A-Za-z]{2,}[^)）\u4e00-\u9fa5]*)[)）]/);
     if (parenMatch) {
         if (!rawEnTitle) {
             rawEnTitle = parenMatch[1].trim();
@@ -317,7 +317,7 @@ function extractCourseIdentityFromWord(rows, course) {
         for (const line of lines) {
             if (/[\u4e00-\u9fa5]/.test(line)) {
                 zhLines.push(line);
-            } else if (!rawEnTitle && /^[A-Za-z0-9\s,&.:()/'"+\u00a0–—®™©：；，（）／－-]{3,}$/.test(line)) {
+            } else if (!rawEnTitle && !/[\u4e00-\u9fa5]/.test(line) && /[A-Za-z]{2,}/.test(line)) {
                 rawEnTitle = line;
             }
         }
@@ -455,9 +455,9 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         }
     }
 
-    // English subtitle lines (must not contain Chinese characters)
+    // English subtitle lines: any line in header banner without Chinese characters that contains Latin letters
     for (const l of candidateLines) {
-        if (!/[\u4e00-\u9fa5]/.test(l.lineText) && /^[A-Za-z0-9\s,&.:()/'"+\u00a0–—®™©：；，（）／－-]{3,}$/.test(l.lineText)) {
+        if (!/[\u4e00-\u9fa5]/.test(l.lineText) && /[A-Za-z]{2,}/.test(l.lineText) && l.lineText !== code) {
             enLines.push(l.lineText);
         }
     }
@@ -479,7 +479,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
     }
 
     if (!enTitle) {
-        const parenMatch = zhTitle.match(/[(（]([A-Za-z0-9\s,&.:()/'"+\u00a0–—®™©：；，／－-]{4,})[)）]/);
+        const parenMatch = zhTitle.match(/[(（]([^)）\u4e00-\u9fa5]*[A-Za-z]{2,}[^)）\u4e00-\u9fa5]*)[)）]/);
         if (parenMatch) {
             enTitle = parenMatch[1].trim();
             zhTitle = zhTitle.replace(parenMatch[0], ' ').trim();
