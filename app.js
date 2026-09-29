@@ -1148,7 +1148,21 @@ function getColumnSplits(secItems) {
     if (!secItems || secItems.length === 0) return [];
     
     // 1. Identify true bullet / item markers at the start of a column/line
-    const bullets = secItems.filter(it => BULLET_ITEM_PATTERN.test(it.str.trim()));
+    const bullets = secItems.filter(it => {
+        const trimmed = it.str.trim();
+        if (!BULLET_ITEM_PATTERN.test(trimmed)) return false;
+        // Bare punctuation or hyphens inside running text cannot be column bullets
+        if (trimmed === '-' || trimmed === '–' || trimmed === '—' || trimmed === '·') {
+            const hasPreceding = secItems.some(other => 
+                other !== it && 
+                Math.abs(other.y - it.y) <= 3 && 
+                other.x < it.x && 
+                (other.x + (other.w || other.str.length * 6)) >= it.x - 8
+            );
+            if (hasPreceding) return false;
+        }
+        return true;
+    });
 
     if (bullets.length >= 2) {
         const bulletXs = bullets.map(b => b.x).sort((a, b) => a - b);
@@ -1174,7 +1188,21 @@ function getColumnSplits(secItems) {
         if (validClusters.length >= 2) {
             const splits = [];
             for (let i = 1; i < validClusters.length; i++) {
-                splits.push(Math.round(validClusters[i].min - 8));
+                const colStartX = validClusters[i].min;
+                const prevColItems = secItems.filter(it => it.x < colStartX);
+                let maxRight = 0;
+                for (const it of prevColItems) {
+                    const charW = /[\u4e00-\u9fa5]/.test(it.str) ? 10 : 6;
+                    const right = it.x + (it.w || it.str.length * charW);
+                    if (right > maxRight) maxRight = right;
+                }
+                let splitX;
+                if (colStartX > maxRight) {
+                    splitX = Math.round((maxRight + colStartX) / 2);
+                } else {
+                    splitX = Math.round(colStartX - 2);
+                }
+                splits.push(splitX);
             }
             return splits;
         }
