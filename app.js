@@ -276,11 +276,25 @@ function extractCourseIdentityFromWord(rows, course) {
 
     if (rows.length > 0) {
         const row0 = rows[0];
-        if (row0.length >= 2 && row0[0].fullText.length <= 10 && row0[0].fullText.length > 0) {
+        if (row0.length >= 2 && row0[0].fullText.trim().length <= 10 && row0[0].fullText.trim().length > 0) {
             rawCode = row0[0].fullText.trim();
             rawTitle = row0.slice(1).map(c => c.fullText).join(' ').trim();
         } else {
             rawTitle = row0.map(c => c.fullText).join(' ').trim();
+            // In tables where row 0 cell 0 is blank (e.g. NSPA, ANSPA, CNSPA),
+            // the course code is placed in row 1 cell 0 alongside the English title in row 1 cell 1.
+            if (rows.length > 1 && rows[1].length >= 2) {
+                const r1c0 = rows[1][0].fullText.trim();
+                const KNOWN_NON_CODE_LABELS = ['英文課名', '英文名稱', '原廠課名', '英文', '時數', '費用', '點數', '教材', '課程目標', '適合對象'];
+                const isNonCode = KNOWN_NON_CODE_LABELS.some(l => r1c0.startsWith(l)) || 
+                                  r1c0.toLowerCase().startsWith('course') || 
+                                  r1c0.toLowerCase().startsWith('english');
+                if (!isNonCode && /^[A-Za-z0-9_-]{2,10}$/.test(r1c0)) {
+                    rawCode = r1c0;
+                    const r1Rest = rows[1].slice(1).map(c => c.fullText).join(' ').trim();
+                    if (r1Rest) rawEnTitle = r1Rest;
+                }
+            }
         }
     }
 
@@ -300,7 +314,11 @@ function extractCourseIdentityFromWord(rows, course) {
             if (val) rawEnTitle = val;
             break;
         } else if (r === 1 && !rawEnTitle && !rText.includes('時數') && !rText.includes('費用')) {
-            rawEnTitle = rText.replace(/^[|：:\s]+/, '').trim();
+            if (rawCode && rows[r].length >= 2 && rows[r][0].fullText.trim() === rawCode) {
+                rawEnTitle = rows[r].slice(1).map(c => c.fullText).join(' ').trim();
+            } else {
+                rawEnTitle = rText.replace(/^[|：:\s]+/, '').trim();
+            }
         }
     }
 
@@ -342,6 +360,24 @@ function extractCourseIdentityFromWord(rows, course) {
         }
     } else {
         rawTitle = rawTitle.replace(new RegExp(`^${rawCode}[：:\\s]*`), '').trim();
+    }
+
+    // 4. Fallback: extract course code from rawEnTitle if still not found
+    if (!rawCode && rawEnTitle) {
+        const enCodeMatch = rawEnTitle.match(/^([A-Za-z0-9_-]{2,10})[：:\s]+([A-Za-z].*)$/);
+        if (enCodeMatch) {
+            const potentialCode = enCodeMatch[1];
+            const COMMON_WORDS = ['THE', 'AN', 'A', 'FOR', 'AND', 'OF', 'IN', 'ON', 'WITH', 'BY', 'TO', 'AT', 'FROM', 'ALL', 'NEW', 'ADVANCED', 'BASIC', 'COURSE', 'PRACTICAL', 'MASTER', 'CYBERSECURITY'];
+            if (!COMMON_WORDS.includes(potentialCode.toUpperCase()) && /^[A-Z0-9_-]+$/.test(potentialCode)) {
+                rawCode = potentialCode;
+                rawEnTitle = enCodeMatch[2].trim();
+            }
+        }
+    }
+
+    // 5. Ensure rawEnTitle is stripped of redundant course code prefix if present
+    if (rawCode && rawEnTitle) {
+        rawEnTitle = rawEnTitle.replace(new RegExp(`^${rawCode}[：:\\s]+`, 'i'), '').trim();
     }
 
     course.course_code = rawCode.trim();
