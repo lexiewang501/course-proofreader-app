@@ -276,7 +276,7 @@ function extractCourseIdentityFromWord(rows, course) {
 
     if (rows.length > 0) {
         const row0 = rows[0];
-        if (row0.length >= 2 && row0[0].fullText.trim().length <= 10 && row0[0].fullText.trim().length > 0) {
+        if (row0.length >= 2 && row0[0].fullText.trim().length <= 15 && row0[0].fullText.trim().length > 0) {
             rawCode = row0[0].fullText.trim();
             rawTitle = row0.slice(1).map(c => c.fullText).join(' ').trim();
         } else {
@@ -289,7 +289,7 @@ function extractCourseIdentityFromWord(rows, course) {
                 const isNonCode = KNOWN_NON_CODE_LABELS.some(l => r1c0.startsWith(l)) || 
                                   r1c0.toLowerCase().startsWith('course') || 
                                   r1c0.toLowerCase().startsWith('english');
-                if (!isNonCode && /^[A-Za-z0-9_-]{2,10}$/.test(r1c0)) {
+                if (!isNonCode && /^[A-Za-z0-9_-]{2,15}$/.test(r1c0)) {
                     rawCode = r1c0;
                     const r1Rest = rows[1].slice(1).map(c => c.fullText).join(' ').trim();
                     if (r1Rest) rawEnTitle = r1Rest;
@@ -347,12 +347,12 @@ function extractCourseIdentityFromWord(rows, course) {
 
     // 3. Extract course code from rawTitle if not already found
     if (!rawCode) {
-        const codeBracketMatch = rawTitle.match(/^[\[【]([A-Za-z0-9_-]{2,10})[\]】]/);
+        const codeBracketMatch = rawTitle.match(/^[\[【]([A-Za-z0-9_-]{2,15})[\]】]/);
         if (codeBracketMatch) {
             rawCode = codeBracketMatch[1];
             rawTitle = rawTitle.replace(codeBracketMatch[0], '').trim();
         } else {
-            const codePrefixMatch = rawTitle.match(/^([A-Za-z0-9_-]{2,10})[：:\s]+(.*)$/);
+            const codePrefixMatch = rawTitle.match(/^([A-Za-z0-9_-]{2,15})[：:\s]+(.*)$/);
             if (codePrefixMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course'].includes(codePrefixMatch[1])) {
                 rawCode = codePrefixMatch[1];
                 rawTitle = codePrefixMatch[2].trim();
@@ -364,7 +364,7 @@ function extractCourseIdentityFromWord(rows, course) {
 
     // 4. Fallback: extract course code from rawEnTitle if still not found
     if (!rawCode && rawEnTitle) {
-        const enCodeMatch = rawEnTitle.match(/^([A-Za-z0-9_-]{2,10})[：:\s]+([A-Za-z].*)$/);
+        const enCodeMatch = rawEnTitle.match(/^([A-Za-z0-9_-]{2,15})[：:\s]+([A-Za-z].*)$/);
         if (enCodeMatch) {
             const potentialCode = enCodeMatch[1];
             const COMMON_WORDS = ['THE', 'AN', 'A', 'FOR', 'AND', 'OF', 'IN', 'ON', 'WITH', 'BY', 'TO', 'AT', 'FROM', 'ALL', 'NEW', 'ADVANCED', 'BASIC', 'COURSE', 'PRACTICAL', 'MASTER', 'CYBERSECURITY'];
@@ -449,9 +449,13 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         // 1. Identify left-side course code badge inside table bounds (35 <= x < 95)
         // Strictly exclude external margin tabs (e.g. EPI, PMI, CompTIA), 4-digit years (2026/2027),
         // accreditation badges (PDU, CPE, OCP, ACP), and small font badges (h < 9)
-        const leftBadge = line.find(it => it.x >= 35 && it.x < 95 && (it.h || 0) >= 9 && /^[A-Za-z0-9_-]{2,10}$/.test(it.str) && !/^[12]\d{3}$/.test(it.str) && !['EPI', 'PMI', 'CompTIA', 'PDU', 'CPE', 'OCP', 'ACP'].includes(it.str));
-        if (leftBadge && !code) {
-            code = leftBadge.str;
+        const leftBadge = line.find(it => it.x >= 35 && it.x < 95 && (it.h || 0) >= 9 && /^[A-Za-z0-9_-]{2,15}$/.test(it.str) && !/^[12]\d{3}$/.test(it.str) && !['EPI', 'PMI', 'CompTIA', 'PDU', 'CPE', 'OCP', 'ACP'].includes(it.str));
+        if (leftBadge) {
+            if (!code) {
+                code = leftBadge.str;
+            } else if (code.endsWith('-')) {
+                code = code + leftBadge.str;
+            }
         }
 
         const contentItems = line.filter(it => it !== leftBadge);
@@ -1020,11 +1024,15 @@ function splitOutlineItems(text) {
  * Also separates compound discount scheme headers (e.g. 課程優惠方案：接早鳥優惠價：) into distinct items.
  */
 function extractListItems(paragraphs, fullText) {
-    // Pre-process paragraphs: if a paragraph combines header like "課程優惠方案：" and a sub-clause like "早鳥優惠價：", split them
+    // Pre-process paragraphs: split compound discount headers and concatenated discount schemes
+    const DISCOUNT_HEADER_SPLIT = /(?<=[^\s：:\n])\s*(?=(?:早鳥優惠|早鳥優惠價|限時優惠|專案優惠|續報優惠|學生優惠|學生優惠價|學生專屬優惠|企業優惠|原廠優惠|證照優惠|重聽服務|方案\s*\d*)[：:])/;
     if (paragraphs && paragraphs.length > 0) {
         paragraphs = paragraphs.flatMap(p => {
             const m = p.match(/^((?:\d+[.、]\s*)?課程優惠方案[：:])\s*((?:早鳥|限時|專案|續報|學生|企業|方案)[^：:\n]{0,8}[：:][\s\S]+)$/);
-            if (m) return [m[1].trim(), m[2].trim()];
+            if (m) return [m[1].trim(), ...m[2].trim().split(DISCOUNT_HEADER_SPLIT).map(s => s.trim()).filter(Boolean)];
+            if (DISCOUNT_HEADER_SPLIT.test(p)) {
+                return p.split(DISCOUNT_HEADER_SPLIT).map(s => s.trim()).filter(Boolean);
+            }
             return [p];
         });
     }
@@ -1078,7 +1086,7 @@ function isNotesItemStart(text, currentItem) {
     if (BULLET_ITEM_PATTERN.test(trimmed)) return true;
 
     // 2. Scheme / discount / note headers ending in colon
-    if (/^(?:課程優惠方案|限時優惠|早鳥優惠|早鳥優惠價|專案優惠|續報優惠|學生優惠|學生專屬優惠|重聽服務|原廠優惠|證照優惠|方案\s*\d*)[：:]/.test(trimmed)) return true;
+    if (/^(?:課程優惠方案|限時優惠|早鳥優惠|早鳥優惠價|專案優惠|續報優惠|學生優惠|學生優惠價|學生專屬優惠|重聽服務|原廠優惠|證照優惠|方案\s*\d*)[：:]/.test(trimmed)) return true;
     if (/^[^：:\n]{2,8}[：:]\s*(?:即日起|開課前|報名|原報名|續報|凡報名|參與|可享|贈送|提供|投入|完成|透過)/.test(trimmed)) return true;
 
     // If current item already started with an explicit number (e.g. "1.", "2."),
@@ -1268,6 +1276,15 @@ function assembleLinesIntoItems(lines, isNotes = false) {
         const prevText = prevLine ? prevLine.text : '';
         if (/^[®™©\s]+$/.test(text.trim())) return false;
 
+        // If current item has unclosed parenthesis, ordinary line continuation belongs to it
+        if (currentItem) {
+            const openCount = (currentItem.match(/[(（]/g) || []).length;
+            const closeCount = (currentItem.match(/[)）]/g) || []).length;
+            if (openCount > closeCount && !BULLET_ITEM_PATTERN.test(text.trim())) {
+                return false;
+            }
+        }
+
         // 1. Explicit bullet / numbering (Chinese, Arabic, circled, symbols, outline headers)
         if (BULLET_ITEM_PATTERN.test(text.trim())) return true;
 
@@ -1358,18 +1375,23 @@ function sortListItems(items) {
         const m = it.match(/^(\d+)[.、]/);
         return { num: m ? parseInt(m[1], 10) : null, text: it };
     });
-    const hasNumbers = numbered.filter(x => x.num !== null).length >= items.length * 0.6;
-    if (hasNumbers) {
-        return [...items].sort((a, b) => {
-            const na = a.match(/^(\d+)[.、]/);
-            const nb = b.match(/^(\d+)[.、]/);
-            if (na && nb) return parseInt(na[1], 10) - parseInt(nb[1], 10);
-            if (na) return -1;
-            if (nb) return 1;
-            return 0;
-        });
+    const nums = numbered.map(x => x.num).filter(n => n !== null);
+    if (nums.length < items.length * 0.6) return items;
+
+    // Check for duplicate numbers (e.g. multiple "1.", "2." indicating nested/domain lists)
+    const uniqueNums = new Set(nums);
+    if (uniqueNums.size < nums.length * 0.8) {
+        return items; // Nested or grouped list with repeated numbering: keep natural layout order!
     }
-    return items;
+
+    return [...items].sort((a, b) => {
+        const na = a.match(/^(\d+)[.、]/);
+        const nb = b.match(/^(\d+)[.、]/);
+        if (na && nb) return parseInt(na[1], 10) - parseInt(nb[1], 10);
+        if (na) return -1;
+        if (nb) return 1;
+        return 0;
+    });
 }
 
 function splitRecommendedCourses(text) {
