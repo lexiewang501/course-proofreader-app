@@ -969,16 +969,24 @@ async function parsePdf(buffer) {
                 } else if (sec.label === '適合對象' || sec.label === '預備知識' || sec.label === '先修課程') {
                     const lines = groupItemsIntoVisualLines(secItems);
                     const lineTexts = lines.map(l => l.text);
-                    if (hasBulletMarkers(lineTexts)) {
+                    if (hasBulletMarkers(lineTexts) || getColumnSplits(secItems).length > 0) {
                         course[sec.label] = extractListFromPdfSection(secItems, false);
                     } else {
                         const assembled = assembleLinesIntoItems(lines, false);
-                        course[sec.label] = assembled.length > 1 ? assembled : (assembled[0] || '');
+                        const split = assembled.flatMap(it => splitInlineBullets(it));
+                        course[sec.label] = split.length > 1 ? split : (split[0] || '');
                     }
                 } else {
-                    // Strictly isolate 學會技能, etc.
-                    const text = secItems.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
-                    course[sec.label] = text;
+                    // Strictly isolate 學會技能, etc. (全欄位支援分欄與項目語意提取)
+                    const lines = groupItemsIntoVisualLines(secItems);
+                    const lineTexts = lines.map(l => l.text);
+                    if (hasBulletMarkers(lineTexts) || getColumnSplits(secItems).length > 0) {
+                        course[sec.label] = extractListFromPdfSection(secItems, false);
+                    } else {
+                        const assembled = assembleLinesIntoItems(lines, false);
+                        const split = assembled.flatMap(it => splitInlineBullets(it));
+                        course[sec.label] = split.length > 1 ? split : (split[0] || '');
+                    }
                 }
             }
 
@@ -1011,6 +1019,16 @@ function cleanItemText(str) {
         .replace(/^[\s•●\-\*※\d.、()（）]+/, '')
         .replace(/^(?:Domain\s*\d+|[A-Za-z]\d+(?:\.\d+)*)[.、\s]*/i, '')
         .trim();
+}
+
+/**
+ * Splits text with in-line embedded bullets or numbering (e.g. "1. xxx 2. yyy" or "● xxx ● yyy").
+ * Prevents horizontally merged items from staying concatenated across all fields.
+ */
+function splitInlineBullets(text) {
+    if (!text) return [];
+    const parts = text.split(/(?<=[^\s])\s+(?=(?:\d+[.、](?!\d)|[•●※·◆▪＊★☆✦✧])\s*)/);
+    return parts.map(p => p.trim()).filter(Boolean);
 }
 
 /**
@@ -1401,7 +1419,8 @@ function extractListFromPdfSection(secItems, isNotes = false) {
         }
     }
 
-    return sortListItems(colItems);
+    const finalItems = isNotes ? colItems : colItems.flatMap(it => splitInlineBullets(it));
+    return isNotes ? finalItems : sortListItems(finalItems);
 }
 
 /**
