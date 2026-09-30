@@ -1793,9 +1793,59 @@ function alignListItems(wItems, pItems, fieldLabel) {
                 const sim = calculateSimilarity(wNorm, pNorm);
 
                 if (wCount >= 2 && pCount === 1 && end < aligned.length && aligned[end].word && !aligned[end].pdf) {
+                    const candidateWord = aligned[end].word;
+                    const candWNorm = normalizeText(cleanItemText(candidateWord));
+
+                    let nextPdfItem = null;
+                    for (let k = end; k < aligned.length; k++) {
+                        if (aligned[k].pdf) {
+                            nextPdfItem = aligned[k].pdf;
+                            break;
+                        }
+                    }
+
+                    if (nextPdfItem) {
+                        const nextPNorm = normalizeText(cleanItemText(nextPdfItem));
+                        if (candWNorm.length >= 4 && (nextPNorm.includes(candWNorm) || candWNorm.includes(nextPNorm) || calculateSimilarity(candWNorm, nextPNorm) >= 0.5)) {
+                            if (sim >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm)) {
+                                consolidated.push({
+                                    word: wTexts.join('\n'),
+                                    pdf: pTexts.join('\n')
+                                });
+                                cIdx = end;
+                                wCount = -1;
+                            }
+                            break;
+                        }
+                    }
                     continue;
                 }
                 if (wCount === 1 && pCount >= 2 && end < aligned.length && !aligned[end].word && aligned[end].pdf) {
+                    const candidatePdf = aligned[end].pdf;
+                    const candPNorm = normalizeText(cleanItemText(candidatePdf));
+
+                    let nextWordItem = null;
+                    for (let k = end; k < aligned.length; k++) {
+                        if (aligned[k].word) {
+                            nextWordItem = aligned[k].word;
+                            break;
+                        }
+                    }
+
+                    if (nextWordItem) {
+                        const nextWNorm = normalizeText(cleanItemText(nextWordItem));
+                        if (candPNorm.length >= 4 && (nextWNorm.includes(candPNorm) || candPNorm.includes(nextWNorm) || calculateSimilarity(candPNorm, nextWNorm) >= 0.5)) {
+                            if (sim >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm)) {
+                                consolidated.push({
+                                    word: wTexts.join('\n'),
+                                    pdf: pTexts.join('\n')
+                                });
+                                cIdx = end;
+                                wCount = -1;
+                            }
+                            break;
+                        }
+                    }
                     continue;
                 }
 
