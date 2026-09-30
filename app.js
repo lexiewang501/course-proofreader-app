@@ -430,7 +430,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         }
 
         const standaloneCodeMatch = lineText.match(/^[A-Za-z0-9_-]{2,10}$/);
-        if (standaloneCodeMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course', 'EPI', 'PMI', 'CompTIA'].includes(standaloneCodeMatch[0])) {
+        if (lineMaxH <= 13 && standaloneCodeMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course', 'EPI', 'PMI', 'CompTIA'].includes(standaloneCodeMatch[0])) {
             codeBadges.push({ badge: { str: standaloneCodeMatch[0] }, y: line[0].y, lineMaxH, line });
             continue;
         }
