@@ -31,8 +31,7 @@ const LIST_FIELDS = new Set([
     '先修課程'
 ]);
 
-// Universal outline numbering & bullet patterns (Chinese & Arabic numbers, bullets, brackets, outline headers, Domains, learning codes)
-const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、.．]|\d+\.(?!\d)|[【\[]\d+[】\]]|[•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
+const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天分歲折元點門科題人個\d])|$)|[【\[]\d+[】\]]|[•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
 
 // Global Application State
 const state = {
@@ -1040,7 +1039,7 @@ function cleanItemText(str) {
     if (!str) return '';
     return str
         .replace(/^[\s•●\-\*※\d.、()（）]+/, '')
-        .replace(/^(?:Domain\s*\d+|[A-Za-z]\d+(?:\.\d+)*)[.、\s]*/i, '')
+        .replace(/^(?:Domain\s*\d+|[A-Za-z]\d+(?:\.\d+)*|[A-Za-z])[.、)）\s]+/i, '')
         .trim();
 }
 
@@ -1183,12 +1182,28 @@ function assembleNotesLines(lines) {
 }
 
 /**
- * Extracts note items from PDF section in single-column layout with robust line assembly.
+ * Extracts note items from PDF section, supporting multi-column layout with robust line assembly.
  */
 function extractNotesFromPdfSection(secItems) {
     if (!secItems || secItems.length === 0) return [];
-    const lines = groupItemsIntoVisualLines(secItems);
-    return assembleNotesLines(lines);
+    const splits = getColumnSplits(secItems);
+    if (splits.length === 0) {
+        const lines = groupItemsIntoVisualLines(secItems);
+        return assembleNotesLines(lines);
+    }
+
+    const colItems = [];
+    for (let i = 0; i <= splits.length; i++) {
+        const minX = i === 0 ? 0 : splits[i - 1];
+        const maxX = i === splits.length ? 9999 : splits[i];
+        const itemsInCol = secItems.filter(it => it.x >= minX && it.x < maxX);
+        if (itemsInCol.length > 0) {
+            const lines = groupItemsIntoVisualLines(itemsInCol);
+            const assembled = assembleNotesLines(lines);
+            colItems.push(...assembled);
+        }
+    }
+    return colItems;
 }
 
 /**
@@ -1202,16 +1217,14 @@ function getColumnSplits(secItems) {
     const bullets = secItems.filter(it => {
         const trimmed = it.str.trim();
         if (!BULLET_ITEM_PATTERN.test(trimmed)) return false;
-        // Bare punctuation or hyphens inside running text cannot be column bullets
-        if (trimmed === '-' || trimmed === '–' || trimmed === '—' || trimmed === '·') {
-            const hasPreceding = secItems.some(other => 
-                other !== it && 
-                Math.abs(other.y - it.y) <= 3 && 
-                other.x < it.x && 
-                (other.x + (other.w || other.str.length * 6)) >= it.x - 8
-            );
-            if (hasPreceding) return false;
-        }
+        // Any bullet preceded closely by text on the same line is inside running text, not a column bullet!
+        const hasPreceding = secItems.some(other => 
+            other !== it && 
+            Math.abs(other.y - it.y) <= 3.5 && 
+            other.x < it.x && 
+            (other.x + (other.w || (other.str.length * (/[一-龥]/.test(other.str) ? 10 : 6)))) >= it.x - 2
+        );
+        if (hasPreceding) return false;
         return true;
     });
 
