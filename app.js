@@ -1060,7 +1060,7 @@ function splitInlineBullets(text) {
  */
 function splitOutlineItems(text) {
     if (!text) return [];
-    const parts = text.split(/(?=\b\d+[.、]|\s*[•●※·◆▪＊★☆✦✧]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
+    const parts = text.split(/(?=(?<=^|[\s\r\n])\d{1,2}[.、](?!\d)|\s*[•●※·◆▪＊★☆✦✧]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
     const res = [];
     for (const p of parts) {
         const trimmed = p.trim();
@@ -1076,7 +1076,7 @@ function splitOutlineItems(text) {
  */
 function extractListItems(paragraphs, fullText) {
     // Pre-process paragraphs: split compound discount headers and concatenated discount schemes
-    const DISCOUNT_HEADER_SPLIT = /(?<=[^\s：:\n])\s*(?=(?:早鳥優惠|早鳥優惠價|限時優惠|專案優惠|續報優惠|學生優惠|學生優惠價|學生專屬優惠|企業優惠|原廠優惠|證照優惠|重聽服務|方案\s*\d*)[：:])/;
+    const DISCOUNT_HEADER_SPLIT = /(?<=[^\s：:\n])\s*(?=(?:早鳥優惠|早鳥優惠價|限時優惠|專案優惠|續報優惠|學生優惠|學生優惠價|學生專屬優惠|企業優惠|原廠優惠|證照優惠|重聽服務|方案\s*[一二三四五六七八九十\d]+)[：:])/;
     if (paragraphs && paragraphs.length > 0) {
         paragraphs = paragraphs.flatMap(p => {
             const m = p.match(/^((?:\d+[.、]\s*)?課程優惠方案[：:])\s*((?:早鳥|限時|專案|續報|學生|企業|方案)[^：:\n]{0,8}[：:][\s\S]+)$/);
