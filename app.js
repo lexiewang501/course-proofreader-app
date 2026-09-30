@@ -32,6 +32,7 @@ const LIST_FIELDS = new Set([
 ]);
 
 const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘)|$)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天歲折元點門科題人個\d]|分鐘)|$)|[【\[]\d+[】\]]|[•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
+const MODULE_HEADER_PATTERN = /^(?:[•●※·◆▪＊★☆✦✧-]\s*)?(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+/i;
 
 // Global Application State
 const state = {
@@ -1027,12 +1028,28 @@ function splitInlineBullets(text) {
  */
 function splitOutlineItems(text) {
     if (!text) return [];
-    const parts = text.split(/(?=(?<=^|[\s\r\n])\d{1,2}[.、](?!\d)|(?<=^|[\s\r\n])\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[•●※·◆▪＊★☆✦✧]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
+    const parts = text.split(/(?=(?<=^|[\s\r\n])(?<!Top\s*|top\s*)\d{1,2}[.、](?!\d)|(?<=^|[\s\r\n])\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[•●※·◆▪＊★☆✦✧]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
     const res = [];
+    let cur = '';
     for (const p of parts) {
         const trimmed = p.trim();
-        if (trimmed) res.push(trimmed);
+        if (!trimmed) continue;
+        if (!cur) {
+            cur = trimmed;
+        } else {
+            const openZh = (cur.match(/（/g) || []).length;
+            const closeZh = (cur.match(/）/g) || []).length;
+            const openEn = (cur.match(/\(/g) || []).length;
+            const closeEn = (cur.match(/\)/g) || []).length;
+            if (openZh > closeZh || openEn > closeEn) {
+                cur += ' ' + trimmed;
+            } else {
+                res.push(cur);
+                cur = trimmed;
+            }
+        }
     }
+    if (cur) res.push(cur);
     return res.length > 0 ? res : [text.trim()];
 }
 
@@ -1107,7 +1124,16 @@ function extractListItems(paragraphs, fullText) {
         const isBullet = BULLET_ITEM_PATTERN.test(item);
         const prevItem = items.length > 0 ? items[items.length - 1] : '';
         const prevIsBullet = prevItem && BULLET_ITEM_PATTERN.test(prevItem);
+        const prevIsModuleHeader = prevItem && MODULE_HEADER_PATTERN.test(prevItem);
+        const isTopicWithColon = /^[^：:\n]{2,18}[：:]/.test(item);
+
         if (isBullet) {
+            items.push(item);
+        } else if (prevIsModuleHeader) {
+            // NEVER merge sub-items into a Module/Chapter heading!
+            items.push(item);
+        } else if (isTopicWithColon) {
+            // Standalone sub-topic with title colon (e.g. 存取控制與雲端模型：...), never merge into prev
             items.push(item);
         } else if (prevIsBullet && !prevItem.endsWith('：') && !prevItem.endsWith(':')) {
             // Unnumbered paragraph following a bullet item: append as body text
