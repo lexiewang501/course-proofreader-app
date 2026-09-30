@@ -352,7 +352,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
     // for multi-line titles (e.g. 2-line Chinese titles like SEMGEI).
     // Out-of-table elements such as side tab markers (x < 35) are strictly excluded.
     const maxHeaderY = Math.min(courseTop, metaY + 80);
-    let validItems = headerItems.filter(it => (it.x < 95 ? (it.x >= 35 && it.y >= metaY - 5) : it.y > metaY + 3) && it.y <= maxHeaderY);
+    let validItems = headerItems.filter(it => (it.x < 88 ? (it.x >= 35 && it.y >= metaY - 5) : it.y > metaY + 3) && it.y <= maxHeaderY);
 
     // Merge superscript symbols (® / ™ / ©) into the preceding word/acronym
     const supers = validItems.filter(it => /^[®™©]$/.test(it.str));
@@ -394,10 +394,10 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
     for (const line of lines) {
         const lineMaxH = Math.max(...line.map(it => it.h || 0));
 
-        // 1. Identify left-side course code badge inside table bounds (35 <= x < 95)
+        // 1. Identify left-side course code badge inside table bounds (35 <= x < 88)
         // Strictly exclude external margin tabs (e.g. EPI, PMI, CompTIA), 4-digit years (2026/2027),
-        // accreditation badges (PDU, CPE, OCP, ACP), and small font badges (h < 9)
-        const leftBadge = line.find(it => it.x >= 35 && it.x < 95 && (it.h || 0) >= 9 && /^[A-Za-z0-9_-]{2,15}$/.test(it.str) && !/^[12]\d{3}$/.test(it.str) && !['EPI', 'PMI', 'CompTIA', 'PDU', 'CPE', 'OCP', 'ACP'].includes(it.str));
+        // accreditation badges (PDU, CPE, OCP, ACP), title-sized fonts (h > 16), and small font badges (h < 9)
+        const leftBadge = line.find(it => it.x >= 35 && it.x < 88 && (it.h || 0) >= 9 && (it.h || 0) <= 16 && /^[A-Za-z0-9_-]{2,15}$/.test(it.str) && !/^[12]\d{3}$/.test(it.str) && !['EPI', 'PMI', 'CompTIA', 'PDU', 'CPE', 'OCP', 'ACP', 'AI', 'APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course'].includes(it.str));
         if (leftBadge) {
             codeBadges.push({ badge: leftBadge, y: line[0].y, lineMaxH, line });
         }
@@ -430,7 +430,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         }
 
         const standaloneCodeMatch = lineText.match(/^[A-Za-z0-9_-]{2,10}$/);
-        if (lineMaxH <= 13 && standaloneCodeMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course', 'EPI', 'PMI', 'CompTIA'].includes(standaloneCodeMatch[0])) {
+        if (lineMaxH <= 13 && standaloneCodeMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course', 'EPI', 'PMI', 'CompTIA', 'AI'].includes(standaloneCodeMatch[0])) {
             codeBadges.push({ badge: { str: standaloneCodeMatch[0] }, y: line[0].y, lineMaxH, line });
             continue;
         }
@@ -489,7 +489,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         zhTitle = zhTitle.replace(new RegExp(`^${code}[：:\\s]*`), '').trim();
     } else {
         const prefixMatch = zhTitle.match(/^([A-Za-z0-9_-]{2,10})[：:\s]+(.*)$/);
-        if (prefixMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course'].includes(prefixMatch[1])) {
+        if (prefixMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course', 'AI'].includes(prefixMatch[1])) {
             code = prefixMatch[1];
             zhTitle = prefixMatch[2].trim();
         }
