@@ -1456,7 +1456,9 @@ function sortListItems(items) {
         return { num: m ? parseInt(m[1], 10) : null, text: it };
     });
     const nums = numbered.map(x => x.num).filter(n => n !== null);
-    if (nums.length < items.length * 0.6) return items;
+    if (nums.length === 0) return items;
+
+    if (nums.length < items.length * 0.4) return items;
 
     // Check for duplicate numbers (e.g. multiple "1.", "2." indicating nested/domain lists)
     const uniqueNums = new Set(nums);
@@ -1464,14 +1466,44 @@ function sortListItems(items) {
         return items; // Nested or grouped list with repeated numbering: keep natural layout order!
     }
 
-    return [...items].sort((a, b) => {
-        const na = a.match(/^(\d+)(?:[.、．]|\s+)/);
-        const nb = b.match(/^(\d+)(?:[.、．]|\s+)/);
-        if (na && nb) return parseInt(na[1], 10) - parseInt(nb[1], 10);
-        if (na) return -1;
-        if (nb) return 1;
+    // Check if the numbers are ALREADY in monotonically increasing order
+    let isAlreadySorted = true;
+    for (let i = 1; i < nums.length; i++) {
+        if (nums[i] < nums[i - 1]) {
+            isAlreadySorted = false;
+            break;
+        }
+    }
+    if (isAlreadySorted) {
+        return items; // Already sorted in natural layout order!
+    }
+
+    // Group each numbered item with its following unnumbered / bullet sub-items
+    const groups = [];
+    let curGroup = null;
+
+    for (const it of items) {
+        const m = it.match(/^(\d+)(?:[.、．]|\s+)/);
+        if (m) {
+            curGroup = { num: parseInt(m[1], 10), items: [it] };
+            groups.push(curGroup);
+        } else {
+            if (curGroup) {
+                curGroup.items.push(it);
+            } else {
+                groups.push({ num: null, items: [it] });
+            }
+        }
+    }
+
+    groups.sort((a, b) => {
+        if (a.num !== null && b.num !== null) return a.num - b.num;
+        if (a.num !== null) return -1;
+        if (b.num !== null) return 1;
         return 0;
     });
+
+    return groups.flatMap(g => g.items);
 }
 
 function findRawSliceLength(rawText, targetNormalized) {
