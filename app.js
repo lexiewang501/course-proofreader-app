@@ -65,9 +65,6 @@ const elements = {
     pdfFileMeta: document.getElementById('pdfFileMeta'),
 
     btnStartCompare: document.getElementById('btnStartCompare'),
-    btnSampleBlockchain: document.getElementById('btnSampleBlockchain'),
-    btnSampleJianzhen: document.getElementById('btnSampleJianzhen'),
-    btnSampleComptia: document.getElementById('btnSampleComptia'),
 
     loadingIndicator: document.getElementById('loadingIndicator'),
     loadingText: document.getElementById('loadingText'),
@@ -109,11 +106,6 @@ function setupUploadHandlers() {
     setupDropzone(elements.wordDropzone, elements.wordInput, (file) => handleWordFile(file));
     setupDropzone(elements.pdfDropzone, elements.pdfInput, (file) => handlePdfFile(file));
 
-    elements.btnSampleBlockchain.addEventListener('click', () => loadSample('blockchain'));
-    elements.btnSampleJianzhen.addEventListener('click', () => loadSample('jianzhen'));
-    if (elements.btnSampleComptia) {
-        elements.btnSampleComptia.addEventListener('click', () => loadSample('comptia'));
-    }
     elements.btnStartCompare.addEventListener('click', runComparison);
 }
 
@@ -215,50 +207,6 @@ function checkReadyToCompare() {
         elements.btnStartCompare.disabled = false;
         elements.btnStartCompare.classList.add('ring-4', 'ring-blue-500/30', 'animate-pulse');
         setTimeout(() => elements.btnStartCompare.classList.remove('animate-pulse'), 1500);
-    }
-}
-async function loadSample(type) {
-    let wordPath, pdfPath, labelName;
-    if (type === 'blockchain') {
-        wordPath = '恆逸_區塊鏈_2027年1-6月課程.docx';
-        pdfPath = '區塊鏈.pdf';
-        labelName = '區塊鏈';
-    } else if (type === 'jianzhen') {
-        wordPath = '恆逸_鑒真數位_2027年1-6月課程v1_1.docx';
-        pdfPath = '鑒真數位.pdf';
-        labelName = '鑒真數位';
-    } else {
-        wordPath = '恆逸_CompTIA_2027年1-6月課程.docx';
-        pdfPath = 'CompTIA.pdf';
-        labelName = 'CompTIA';
-    }
-
-    try {
-        elements.loadingIndicator.classList.remove('hidden');
-        elements.loadingText.textContent = `正在讀取本地測試檔案 (${labelName})...`;
-
-        const [wordRes, pdfRes] = await Promise.all([
-            fetch(encodeURIComponent(wordPath)),
-            fetch(encodeURIComponent(pdfPath))
-        ]);
-
-        const [wordBlob, pdfBlob] = await Promise.all([
-            wordRes.blob(),
-            pdfRes.blob()
-        ]);
-
-        const wordFile = new File([wordBlob], wordPath, { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-        const pdfFile = new File([pdfBlob], pdfPath, { type: 'application/pdf' });
-
-        await handleWordFile(wordFile);
-        await handlePdfFile(pdfFile);
-
-        elements.loadingIndicator.classList.add('hidden');
-        showToast(`成功載入樣本檔案！點選右側按鈕即可開始校稿`);
-    } catch (err) {
-        console.error(err);
-        elements.loadingIndicator.classList.add('hidden');
-        showToast('載入樣本失敗，請手動拖入檔案！', true);
     }
 }
 
