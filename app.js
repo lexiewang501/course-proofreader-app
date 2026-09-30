@@ -713,7 +713,8 @@ async function parseDocx(buffer) {
                     course[matchedLabel] = Array.isArray(course[matchedLabel]) ? [...course[matchedLabel], ...newItems] : newItems;
                 } else if (matchedLabel === '後續推薦課程') {
                     const allParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
-                    const newItems = allParas.length > 0 ? allParas : splitRecommendedCourses(cellFull);
+                    const rawItems = allParas.length > 0 ? allParas : (cellFull ? [cellFull] : []);
+                    const newItems = rawItems.flatMap(p => splitRecommendedCourses(p));
                     course['後續推薦課程'] = Array.isArray(course['後續推薦課程']) ? [...course['後續推薦課程'], ...newItems] : newItems;
                 } else if (matchedLabel === '課程目標') {
                     const val = cellParas.length > 0 ? cellParas.join('\n') : cellFull;
@@ -730,6 +731,15 @@ async function parseDocx(buffer) {
         // If course identity exists, push to list
         if (course.course_name_zh || course.course_code || course.course_name_en) {
             courses.push(course);
+        }
+    }
+
+    // Post-pass: split any concatenated recommended courses using catalog titles
+    const docxTitles = courses.flatMap(c => [c.course_name_zh, c.course_name_en]).filter(t => t && t.length >= 4 && !/^[A-Za-z0-9/_-]+$/.test(t));
+    for (const course of courses) {
+        if (course['後續推薦課程']) {
+            const rawRec = Array.isArray(course['後續推薦課程']) ? course['後續推薦課程'] : [course['後續推薦課程']];
+            course['後續推薦課程'] = rawRec.flatMap(t => splitRecommendedCourses(t, docxTitles));
         }
     }
 
@@ -995,6 +1005,15 @@ async function parsePdf(buffer) {
             }
 
             courses.push(course);
+        }
+    }
+
+    // Post-pass: split any concatenated recommended courses using catalog titles
+    const pdfTitles = courses.flatMap(c => [c.course_name_zh, c.course_name_en]).filter(t => t && t.length >= 4 && !/^[A-Za-z0-9/_-]+$/.test(t));
+    for (const course of courses) {
+        if (course['後續推薦課程']) {
+            const rawRec = Array.isArray(course['後續推薦課程']) ? course['後續推薦課程'] : [course['後續推薦課程']];
+            course['後續推薦課程'] = rawRec.flatMap(t => splitRecommendedCourses(t, pdfTitles));
         }
     }
 
@@ -1455,25 +1474,105 @@ function sortListItems(items) {
     });
 }
 
-function splitRecommendedCourses(text) {
+function findRawSliceLength(rawText, targetNormalized) {
+    if (!rawText || !targetNormalized) return 0;
+    for (let i = 1; i <= rawText.length; i++) {
+        if (normalizeText(rawText.slice(0, i)) === targetNormalized) {
+            return i;
+        }
+    }
+    return rawText.length;
+}
+
+function findRawPrefixIndex(rawText, targetNormalizedIndex) {
+    if (!rawText) return 0;
+    for (let i = 1; i <= rawText.length; i++) {
+        if (normalizeText(rawText.slice(0, i)).length >= targetNormalizedIndex) {
+            return i;
+        }
+    }
+    return rawText.length;
+}
+
+function splitRecommendedCourses(text, catalogTitles = []) {
     if (!text) return [];
     const trimmed = text.trim();
     if (!trimmed) return [];
 
     // 1. If contains newlines
     if (trimmed.includes('\n')) {
-        return trimmed.split(/\n+/).map(s => s.trim()).filter(Boolean);
+        return trimmed.split(/\n+/).flatMap(s => splitRecommendedCourses(s, catalogTitles)).map(s => s.trim()).filter(Boolean);
     }
 
-    // 2. If contains course codes with colon (e.g. BCIC：... BCFS：... COASP ：...)
-    const matches = trimmed.match(/[A-Za-z0-9_-]{2,10}\s*[：:][\s\S]*?(?=(?:[A-Za-z0-9_-]{2,10}\s*[：:]|$))/g);
-    if (matches && matches.length > 0) {
-        return matches.map(s => s.trim()).filter(Boolean);
-    }
-
-    // 3. If separated by semicolon
+    // 2. If separated by semicolon
     if (trimmed.includes('；') || trimmed.includes(';')) {
-        return trimmed.split(/[；;]+/).map(s => s.trim()).filter(Boolean);
+        return trimmed.split(/[；;]+/).flatMap(s => splitRecommendedCourses(s, catalogTitles)).map(s => s.trim()).filter(Boolean);
+    }
+
+    // 3. Embedded course code: preceded by non-ASCII (Chinese) or whitespace, followed by code + colon
+    if (/(?<=[^\x00-\x7F\s]|\s)(?=[A-Za-z0-9/_-]{2,12}\s*[：:])/.test(trimmed)) {
+        return trimmed.split(/(?<=[^\x00-\x7F\s]|\s)(?=[A-Za-z0-9/_-]{2,12}\s*[：:])/).flatMap(s => splitRecommendedCourses(s, catalogTitles)).map(s => s.trim()).filter(Boolean);
+    }
+
+    // 4. If catalogTitles provided, split by matching titles
+    if (catalogTitles && catalogTitles.length > 0) {
+        const validTitles = catalogTitles.filter(t => t && t.length >= 4 && !/^[A-Za-z0-9/_-]+$/.test(t));
+        const sorted = [...validTitles].sort((a, b) => b.length - a.length);
+
+        const result = [];
+        let remaining = trimmed;
+
+        while (remaining.length > 0) {
+            const codePrefixMatch = remaining.match(/^([A-Za-z0-9/_-]{2,12}\s*[：:\s]\s*)(.*)$/);
+            let checkText = remaining;
+            let codePrefix = '';
+            if (codePrefixMatch) {
+                codePrefix = codePrefixMatch[1];
+                checkText = codePrefixMatch[2];
+            }
+
+            const normCheck = normalizeText(checkText);
+            if (!normCheck) {
+                result.push(remaining);
+                break;
+            }
+
+            const matchedPrefix = sorted.find(t => normCheck.startsWith(normalizeText(t)));
+            if (matchedPrefix) {
+                const len = findRawSliceLength(checkText, normalizeText(matchedPrefix));
+                result.push((codePrefix + checkText.slice(0, len)).trim());
+                remaining = checkText.slice(len).trim();
+                continue;
+            }
+
+            if (!codePrefix) {
+                const normR = normalizeText(remaining);
+                let bestIdx = -1;
+                let bestTitle = null;
+                for (const t of sorted) {
+                    const normT = normalizeText(t);
+                    const idx = normR.indexOf(normT);
+                    if (idx > 0 && (bestIdx === -1 || idx < bestIdx)) {
+                        bestIdx = idx;
+                        bestTitle = t;
+                    }
+                }
+
+                if (bestIdx > 0 && bestTitle) {
+                    const splitIdx = findRawPrefixIndex(remaining, bestIdx);
+                    const prefixPart = remaining.slice(0, splitIdx).trim();
+                    if (prefixPart) result.push(prefixPart);
+                    remaining = remaining.slice(splitIdx).trim();
+                    continue;
+                }
+            }
+
+            result.push(remaining);
+            break;
+        }
+        if (result.length > 1) {
+            return result.filter(Boolean);
+        }
     }
 
     return [trimmed];
@@ -2232,19 +2331,39 @@ function compareSinglePair(w, p) {
     if (notesDiff.status === 'yellow') hasYellow = true;
 
     // 9. 後續推薦課程 (業務規則：PDF 只會抓取 Word 的第一個推薦課程，若有第2、第3個推薦課程未排上 PDF 視為正常)
-    const wRecList = Array.isArray(w['後續推薦課程'])
-        ? w['後續推薦課程']
+    let wRecList = Array.isArray(w['後續推薦課程'])
+        ? [...w['後續推薦課程']]
         : splitRecommendedCourses(w['後續推薦課程'] || '');
-    const pRecList = Array.isArray(p['後續推薦課程'])
-        ? p['後續推薦課程']
+    let pRecList = Array.isArray(p['後續推薦課程'])
+        ? [...p['後續推薦課程']]
         : splitRecommendedCourses(p['後續推薦課程'] || '');
+
+    const cleanRec = s => s.replace(/^[A-Za-z0-9/_-]{2,12}\s*[：:]\s*/, '').replace(/^[A-Z0-9_-]*\d[A-Z0-9_-]*\s+(?=[\u4e00-\u9fa5])/, '').trim();
+
+    // Re-split using partner's recommendations if concatenated in Word
+    if (wRecList.length > 0 && pRecList.length > 0) {
+        const pFirstClean = cleanRec(cleanItemText(pRecList[0]));
+        const pFirstNorm = normalizeText(pFirstClean);
+        const wFirstClean = cleanRec(cleanItemText(wRecList[0]));
+        const wFirstNorm = normalizeText(wFirstClean);
+
+        if (pFirstNorm && wFirstNorm.startsWith(pFirstNorm) && wFirstNorm.length > pFirstNorm.length) {
+            const rawW = wRecList[0];
+            const splitIdx = findRawSliceLength(rawW, pFirstNorm);
+            const part1 = rawW.slice(0, splitIdx).trim();
+            const part2 = rawW.slice(splitIdx).trim();
+            if (part1 && part2) {
+                wRecList = [part1, part2, ...wRecList.slice(1)];
+            }
+        }
+    }
 
     const wFirstRec = wRecList.length > 0 ? wRecList[0] : '';
     const pFirstRec = pRecList.length > 0 ? pRecList[0] : '';
 
-    const wFirstNorm = normalizeText(cleanItemText(wFirstRec));
-    const pFirstNorm = normalizeText(cleanItemText(pFirstRec));
-    const wAllNorm = normalizeText(cleanItemText(wRecList.join(' ')));
+    const wFirstNorm = normalizeText(cleanRec(cleanItemText(wFirstRec)));
+    const pFirstNorm = normalizeText(cleanRec(cleanItemText(pFirstRec)));
+    const wAllNorm = normalizeText(cleanRec(cleanItemText(wRecList.join(' '))));
 
     if (wRecList.length === 0 && pRecList.length === 0) {
         fields['後續推薦課程'] = {
