@@ -29,8 +29,8 @@ const LIST_FIELDS = new Set([
     '先修課程'
 ]);
 
-// Universal outline numbering & bullet patterns (Chinese & Arabic numbers, bullets, brackets, outline headers)
-const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、.．]|\d+\.(?!\d)|[【\[]\d+[】\]]|[•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z][.、)）])/i;
+// Universal outline numbering & bullet patterns (Chinese & Arabic numbers, bullets, brackets, outline headers, Domains, learning codes)
+const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、.．]|\d+\.(?!\d)|[【\[]\d+[】\]]|[•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
 
 // Global Application State
 const state = {
@@ -644,6 +644,7 @@ async function parseDocx(buffer) {
         // Extract CourseIdentity (course_code, course_name_zh, course_name_en)
         extractCourseIdentityFromWord(rows, course);
 
+        let lastSectionLabel = null;
         for (let i = 0; i < rows.length; i++) {
             const row = rows[i];
             const rowFullText = row.map(c => c.fullText).join(' ').replace(/\s+/g, ' ').trim();
@@ -669,57 +670,56 @@ async function parseDocx(buffer) {
                     const matMatch = rowFullText.match(/(?:^|[\s|｜])教材[：:\s]+([^|｜\n]+)/);
                     if (matMatch) course['教材'] = matMatch[1].trim();
                 }
+                lastSectionLabel = null;
+                continue;
             }
 
-            // Check known section labels
-            for (const label of KNOWN_LABELS) {
-                if (firstCellText === label || firstCellText.startsWith(label)) {
-                    if (label === '適合對象' || label === '預備知識' || label === '先修課程') {
-                        const cellParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
-                        const cellFull = row.slice(1).map(c => c.fullText).join(' ').trim();
-                        if (hasBulletMarkers(cellParas) || hasBulletMarkers(cellFull) || cellParas.length > 1) {
-                            course[label] = extractListItems(cellParas, cellFull);
-                        } else {
-                            course[label] = cellParas.length === 1 ? cellParas[0] : cellFull;
-                        }
-                    } else if (label === '課程內容' || label === '備註事項') {
-                        const cellParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
-                        const cellFull = row.slice(1).map(c => c.fullText).join(' ').trim();
-                        course[label] = extractListItems(cellParas, cellFull);
-                    } else if (label === '後續推薦課程') {
-                        const allParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
-                        const fullRec = row.slice(1).map(c => c.fullText).join(' ').trim();
-                        course['後續推薦課程'] = allParas.length > 0 ? allParas : splitRecommendedCourses(fullRec);
-                    } else if (label === '課程目標') {
-                        const cellParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
-                        const cellFull = row.slice(1).map(c => c.fullText).join(' ').trim();
-                        course['課程目標'] = cellParas.length > 0 ? cellParas.join('\n') : cellFull;
+            // Check known section labels or continuation rows
+            let matchedLabel = KNOWN_LABELS.find(l => firstCellText === l || firstCellText.startsWith(l));
+            if (!matchedLabel && rowFullText) {
+                matchedLabel = KNOWN_LABELS.find(l => rowFullText.startsWith(l));
+            }
+
+            // Continuation row: firstCell is empty (e.g. vertically merged cell <w:vMerge> or unlabelled follow-up row like CSSLP 課程內容)
+            if (!matchedLabel && !firstCellText && lastSectionLabel) {
+                matchedLabel = lastSectionLabel;
+            }
+
+            if (matchedLabel) {
+                lastSectionLabel = matchedLabel;
+                const cellParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
+                const cellFull = row.slice(1).map(c => c.fullText).join(' ').trim();
+
+                if (matchedLabel === '適合對象' || matchedLabel === '預備知識' || matchedLabel === '先修課程') {
+                    if (hasBulletMarkers(cellParas) || hasBulletMarkers(cellFull) || cellParas.length > 1) {
+                        const newItems = extractListItems(cellParas, cellFull);
+                        course[matchedLabel] = Array.isArray(course[matchedLabel]) ? [...course[matchedLabel], ...newItems] : newItems;
                     } else {
-                        const val = row.slice(1).map(c => c.fullText).join(' ').trim();
-                        course[label] = val;
-                    }
-                } else if (rowFullText.startsWith(label)) {
-                    const isAlreadyPopulated = Array.isArray(course[label]) ? course[label].length > 0 : Boolean(course[label]);
-                    if (!isAlreadyPopulated) {
-                        const val = rowFullText.replace(new RegExp(`^${label}[：:\\s]*`), '').trim();
-                        if (label === '適合對象' || label === '預備知識' || label === '先修課程') {
-                            const valParas = val.split(/\r?\n+/).map(s => s.trim()).filter(Boolean);
-                            if (hasBulletMarkers(val) || valParas.length > 1) {
-                                course[label] = extractListItems(valParas, val);
-                            } else {
-                                course[label] = val;
-                            }
-                        } else if (label === '課程內容' || label === '備註事項') {
-                            course[label] = extractListItems([], val);
-                        } else if (label === '後續推薦課程') {
-                            course['後續推薦課程'] = splitRecommendedCourses(val);
-                        } else if (label === '課程目標') {
-                            course['課程目標'] = val;
+                        const val = cellParas.length === 1 ? cellParas[0] : cellFull;
+                        if (!course[matchedLabel] || (Array.isArray(course[matchedLabel]) && course[matchedLabel].length === 0)) {
+                            course[matchedLabel] = val;
+                        } else if (Array.isArray(course[matchedLabel])) {
+                            course[matchedLabel].push(val);
                         } else {
-                            course[label] = val;
+                            course[matchedLabel] = [course[matchedLabel], val];
                         }
                     }
+                } else if (matchedLabel === '課程內容' || matchedLabel === '備註事項') {
+                    const newItems = extractListItems(cellParas, cellFull);
+                    course[matchedLabel] = Array.isArray(course[matchedLabel]) ? [...course[matchedLabel], ...newItems] : newItems;
+                } else if (matchedLabel === '後續推薦課程') {
+                    const allParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
+                    const newItems = allParas.length > 0 ? allParas : splitRecommendedCourses(cellFull);
+                    course['後續推薦課程'] = Array.isArray(course['後續推薦課程']) ? [...course['後續推薦課程'], ...newItems] : newItems;
+                } else if (matchedLabel === '課程目標') {
+                    const val = cellParas.length > 0 ? cellParas.join('\n') : cellFull;
+                    course['課程目標'] = course['課程目標'] ? course['課程目標'] + '\n' + val : val;
+                } else {
+                    const val = row.slice(1).map(c => c.fullText).join(' ').trim();
+                    course[matchedLabel] = course[matchedLabel] ? course[matchedLabel] + '\n' + val : val;
                 }
+            } else if (firstCellText) {
+                lastSectionLabel = null;
             }
         }
 
@@ -750,6 +750,7 @@ async function parsePdf(buffer) {
         const items = textContent.items.map(it => ({
             x: Math.round(it.transform[4]),
             y: Math.round(it.transform[5]),
+            w: Math.round(it.width * 10) / 10,
             h: Math.round((it.height || 0) * 10) / 10,
             str: it.str.trim()
         })).filter(it => it.str.length > 0 && it.x >= 35 && it.x < 565);
@@ -1000,7 +1001,10 @@ function toCleanItemArray(val) {
 
 function cleanItemText(str) {
     if (!str) return '';
-    return str.replace(/^[\s•●\-\*※\d.、()（）]+/, '').trim();
+    return str
+        .replace(/^[\s•●\-\*※\d.、()（）]+/, '')
+        .replace(/^(?:Domain\s*\d+|[A-Za-z]\d+(?:\.\d+)*)[.、\s]*/i, '')
+        .trim();
 }
 
 /**
@@ -1257,7 +1261,7 @@ function groupItemsIntoVisualLines(items) {
                 const startX = curLineItems[0].x;
                 const lastItem = curLineItems[curLineItems.length - 1];
                 const charW = /[\u4e00-\u9fa5]/.test(lastItem.str) ? 10 : 6;
-                const endX = lastItem.x + Math.max(lastItem.str.length * charW, 10);
+                const endX = lastItem.x + (lastItem.w || Math.max(lastItem.str.length * charW, 10));
                 lines.push({
                     y: curY,
                     startX,
@@ -1276,7 +1280,7 @@ function groupItemsIntoVisualLines(items) {
         const startX = curLineItems[0].x;
         const lastItem = curLineItems[curLineItems.length - 1];
         const charW = /[\u4e00-\u9fa5]/.test(lastItem.str) ? 10 : 6;
-        const endX = lastItem.x + Math.max(lastItem.str.length * charW, 10);
+        const endX = lastItem.x + (lastItem.w || Math.max(lastItem.str.length * charW, 10));
         lines.push({
             y: curY,
             startX,
