@@ -394,10 +394,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
     for (const line of lines) {
         const lineMaxH = Math.max(...line.map(it => it.h || 0));
 
-        // 1. Identify left-side course code badge inside table bounds (35 <= x < 88)
-        // Strictly exclude external margin tabs (e.g. EPI, PMI, CompTIA), 4-digit years (2026/2027),
-        // accreditation badges (PDU, CPE, OCP, ACP), title-sized fonts (h > 16), and small font badges (h < 9)
-        const leftBadge = line.find(it => it.x >= 35 && it.x < 88 && (it.h || 0) >= 9 && (it.h || 0) <= 16 && /^[A-Za-z0-9_-]{2,15}$/.test(it.str) && !/^[12]\d{3}$/.test(it.str) && !['EPI', 'PMI', 'CompTIA', 'PDU', 'CPE', 'OCP', 'ACP', 'AI', 'APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course'].includes(it.str));
+        const leftBadge = line.find(it => it.x >= 35 && it.x < 88 && (it.h || 0) >= 9 && (it.h || 0) <= 16 && /^[A-Za-z0-9_-]{2,15}$/.test(it.str) && !/^[12]\d{3}$/.test(it.str) && !['EPI', 'PMI', 'CompTIA', 'PDU', 'CPE', 'AI', 'APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course'].includes(it.str));
         if (leftBadge) {
             codeBadges.push({ badge: leftBadge, y: line[0].y, lineMaxH, line });
         }
@@ -516,12 +513,95 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
 }
 
 /**
+ * Helper to safely extract XML attributes across native DOM and custom parsers
+ */
+function getXmlAttr(node, name) {
+    if (!node) return null;
+    if (typeof node.getAttribute === 'function') {
+        const val = node.getAttribute(name);
+        if (val !== null && val !== undefined) return val;
+        if (name.includes(':')) {
+            const local = name.split(':')[1];
+            const valLocal = node.getAttribute(local);
+            if (valLocal !== null && valLocal !== undefined) return valLocal;
+        }
+    }
+    if (node.attributes) {
+        if (node.attributes[name] !== undefined) {
+            return typeof node.attributes[name] === 'object' ? node.attributes[name].value : node.attributes[name];
+        }
+        if (name.includes(':')) {
+            const local = name.split(':')[1];
+            if (node.attributes[local] !== undefined) {
+                return typeof node.attributes[local] === 'object' ? node.attributes[local].value : node.attributes[local];
+            }
+        }
+    }
+    return null;
+}
+
+/**
+ * Builds numbering map from Word's word/numbering.xml
+ * Maps numId -> { [ilvl]: { start, numFmt, lvlText } }
+ */
+function buildNumberingMap(numberingDoc) {
+    if (!numberingDoc) return {};
+    const abstractNums = {};
+    const anList = numberingDoc.getElementsByTagName('w:abstractNum');
+    for (let i = 0; i < anList.length; i++) {
+        const an = anList[i];
+        const id = getXmlAttr(an, 'w:abstractNumId') || getXmlAttr(an, 'abstractNumId');
+        if (!id) continue;
+        const lvls = {};
+        const lvlList = an.getElementsByTagName('w:lvl');
+        for (let j = 0; j < lvlList.length; j++) {
+            const lvl = lvlList[j];
+            const ilvl = getXmlAttr(lvl, 'w:ilvl') || getXmlAttr(lvl, 'ilvl') || '0';
+            const startNode = lvl.getElementsByTagName('w:start')[0];
+            const start = startNode ? parseInt(getXmlAttr(startNode, 'w:val') || getXmlAttr(startNode, 'val') || '1', 10) : 1;
+            const numFmtNode = lvl.getElementsByTagName('w:numFmt')[0];
+            const numFmt = numFmtNode ? (getXmlAttr(numFmtNode, 'w:val') || getXmlAttr(numFmtNode, 'val') || 'decimal') : 'decimal';
+            const lvlTextNode = lvl.getElementsByTagName('w:lvlText')[0];
+            const lvlText = lvlTextNode ? (getXmlAttr(lvlTextNode, 'w:val') || getXmlAttr(lvlTextNode, 'val') || '') : '';
+            lvls[ilvl] = { start, numFmt, lvlText };
+        }
+        abstractNums[id] = lvls;
+    }
+
+    const numMap = {};
+    const numList = numberingDoc.getElementsByTagName('w:num');
+    for (let i = 0; i < numList.length; i++) {
+        const num = numList[i];
+        const numId = getXmlAttr(num, 'w:numId') || getXmlAttr(num, 'numId');
+        if (!numId) continue;
+        const absNode = num.getElementsByTagName('w:abstractNumId')[0];
+        const absId = absNode ? (getXmlAttr(absNode, 'w:val') || getXmlAttr(absNode, 'val')) : null;
+        if (absId && abstractNums[absId]) {
+            numMap[numId] = abstractNums[absId];
+        }
+    }
+    return numMap;
+}
+
+/**
  * Parses Word (.docx) file extracting clean table data without deleted (strikethrough) items.
+ * Strictly resolves Word native bullet and numbering lists (<w:numPr>) using word/numbering.xml.
  */
 async function parseDocx(buffer) {
     const zip = await JSZip.loadAsync(buffer);
     const xmlFile = zip.file('word/document.xml');
     if (!xmlFile) throw new Error('無效的 Word 檔案 (找不到 word/document.xml)');
+
+    const numFile = zip.file('word/numbering.xml');
+    let numMap = {};
+    if (numFile) {
+        try {
+            const numXml = await numFile.async('string');
+            const parser = new DOMParser();
+            const numDoc = parser.parseFromString(numXml, 'application/xml');
+            numMap = buildNumberingMap(numDoc);
+        } catch (e) {}
+    }
 
     const xmlString = await xmlFile.async('string');
     const parser = new DOMParser();
@@ -545,9 +625,47 @@ async function parseDocx(buffer) {
                 // Extract clean text, ignoring any text inside strikethrough <w:strike> or <w:dstrike>
                 const pList = tc.getElementsByTagName('w:p');
                 const paragraphs = [];
+                const counters = {};
 
                 for (let pi = 0; pi < pList.length; pi++) {
                     const p = pList[pi];
+
+                    // Resolve native Word bullet and numbering (<w:numPr>)
+                    const numPrList = p.getElementsByTagName('w:numPr');
+                    let prefix = '';
+                    if (numPrList.length > 0) {
+                        const numPr = numPrList[0];
+                        const numIdNode = numPr.getElementsByTagName('w:numId')[0];
+                        const numId = numIdNode ? (getXmlAttr(numIdNode, 'w:val') || getXmlAttr(numIdNode, 'val')) : null;
+                        const ilvlNode = numPr.getElementsByTagName('w:ilvl')[0];
+                        const ilvl = ilvlNode ? (getXmlAttr(ilvlNode, 'w:val') || getXmlAttr(ilvlNode, 'val') || '0') : '0';
+                        if (numId) {
+                            const key = `${numId}_${ilvl}`;
+                            const lvlInfo = numMap[numId] ? numMap[numId][ilvl] : null;
+                            if (counters[key] === undefined) {
+                                counters[key] = lvlInfo ? lvlInfo.start : 1;
+                            } else {
+                                counters[key]++;
+                            }
+                            const n = counters[key];
+                            if (lvlInfo) {
+                                if (lvlInfo.numFmt === 'decimal') {
+                                    const t = lvlInfo.lvlText || `%${parseInt(ilvl, 10) + 1}.`;
+                                    prefix = t.replace(new RegExp(`%${parseInt(ilvl, 10) + 1}`), n) + ' ';
+                                } else if (lvlInfo.numFmt === 'bullet') {
+                                    prefix = (lvlInfo.lvlText || '•') + ' ';
+                                } else if (lvlInfo.numFmt === 'ideographTraditional') {
+                                    const zhNums = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+                                    prefix = (zhNums[n] || n) + '、 ';
+                                } else {
+                                    prefix = n + '. ';
+                                }
+                            } else {
+                                prefix = n + '. ';
+                            }
+                        }
+                    }
+
                     const rList = p.getElementsByTagName('w:r');
                     let pText = '';
 
@@ -565,8 +683,12 @@ async function parseDocx(buffer) {
                             pText += tList[ti].textContent;
                         }
                     }
-                    if (pText.trim().length > 0) {
-                        paragraphs.push(pText.trim());
+                    pText = pText.trim();
+                    if (pText.length > 0) {
+                        if (prefix && !BULLET_ITEM_PATTERN.test(pText)) {
+                            pText = prefix + pText;
+                        }
+                        paragraphs.push(pText);
                     }
                 }
 
@@ -1028,7 +1150,7 @@ function splitInlineBullets(text) {
  */
 function splitOutlineItems(text) {
     if (!text) return [];
-    const parts = text.split(/(?=(?<=^|[\s\r\n])(?<!Top\s*|top\s*)\d{1,2}[.、](?!\d)|(?<=^|[\s\r\n])\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[•●※·◆▪＊★☆✦✧]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
+    const parts = text.split(/(?=(?<=^|[\s\r\n])(?<!Top\s*|top\s*|OS\s*|os\s*|v\s*|V\s*|ver\s*|version\s*)\d{1,2}[.、](?=(?:\s+|[\u4e00-\u9fa5➔→•(（【\["'「『]))|(?<=^|[\s\r\n])\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[•●※·◆▪＊★☆✦✧]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
     const res = [];
     let cur = '';
     for (const p of parts) {
@@ -1059,8 +1181,7 @@ function splitOutlineItems(text) {
  * Also separates compound discount scheme headers (e.g. 課程優惠方案：接早鳥優惠價：) into distinct items.
  */
 function extractListItems(paragraphs, fullText) {
-    // Pre-process paragraphs: split compound discount headers and concatenated discount schemes
-    const DISCOUNT_HEADER_SPLIT = /(?<=[^\s：:\n])\s*(?=(?:早鳥優惠|早鳥優惠價|限時優惠|專案優惠|續報優惠|學生優惠|學生優惠價|學生專屬優惠|企業優惠|原廠優惠|證照優惠|重聽服務|重聽優惠|重聽優惠方案|總複習優惠|方案\s*[一二三四五六七八九十\d]+)[：:])/;
+    const DISCOUNT_HEADER_SPLIT = /(?<=[^\s\d.、()（）:：])\s+(?=(?:早鳥優惠|早鳥優惠價|限時優惠|專案優惠|續報優惠|學生優惠|學生優惠價|學生專屬優惠|企業優惠|原廠優惠|證照優惠|重聽服務|重聽優惠|重聽優惠方案|總複習優惠|方案\s*[一二三四五六七八九十\d]+)[：:])/;
     if (paragraphs && paragraphs.length > 0) {
         paragraphs = paragraphs.flatMap(p => {
             const m = p.match(/^((?:\d+[.、]\s*)?課程優惠方案[：:])\s*((?:早鳥|限時|專案|續報|學生|企業|方案|總複習)[^：:\n]{0,8}[：:][\s\S]+)$/);
