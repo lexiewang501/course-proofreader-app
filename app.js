@@ -424,10 +424,6 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         validItems = remainingItems;
     }
 
-    let code = '';
-    const zhLines = [];
-    const enLines = [];
-
     validItems.sort((a, b) => b.y - a.y || a.x - b.x);
     const lines = [];
     let curY = null;
@@ -444,6 +440,8 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
     if (curLine.length) lines.push(curLine);
 
     const candidateLines = [];
+    const codeBadges = [];
+
     for (const line of lines) {
         const lineMaxH = Math.max(...line.map(it => it.h || 0));
 
@@ -452,11 +450,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         // accreditation badges (PDU, CPE, OCP, ACP), and small font badges (h < 9)
         const leftBadge = line.find(it => it.x >= 35 && it.x < 95 && (it.h || 0) >= 9 && /^[A-Za-z0-9_-]{2,15}$/.test(it.str) && !/^[12]\d{3}$/.test(it.str) && !['EPI', 'PMI', 'CompTIA', 'PDU', 'CPE', 'OCP', 'ACP'].includes(it.str));
         if (leftBadge) {
-            if (!code) {
-                code = leftBadge.str;
-            } else if (code.endsWith('-')) {
-                code = code + leftBadge.str;
-            }
+            codeBadges.push({ badge: leftBadge, y: line[0].y, lineMaxH, line });
         }
 
         const contentItems = line.filter(it => it !== leftBadge);
@@ -487,8 +481,8 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         }
 
         const standaloneCodeMatch = lineText.match(/^[A-Za-z0-9_-]{2,10}$/);
-        if (!code && standaloneCodeMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course', 'EPI', 'PMI', 'CompTIA'].includes(standaloneCodeMatch[0])) {
-            code = standaloneCodeMatch[0];
+        if (standaloneCodeMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course', 'EPI', 'PMI', 'CompTIA'].includes(standaloneCodeMatch[0])) {
+            codeBadges.push({ badge: { str: standaloneCodeMatch[0] }, y: line[0].y, lineMaxH, line });
             continue;
         }
 
@@ -496,21 +490,46 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
     }
 
     // Identify Chinese title lines by font hierarchy (title has largest font in banner)
+    const zhLines = [];
+    const enLines = [];
+    let code = '';
+
     const zhCandidates = candidateLines.filter(l => /[\u4e00-\u9fa5]/.test(l.lineText));
+    let maxZhY = -1;
+    let minZhY = 9999;
     if (zhCandidates.length > 0) {
         const maxZhH = Math.max(...zhCandidates.map(l => l.lineMaxH));
         for (const l of candidateLines) {
-            if (l.lineText === code) continue;
             // Line has matching dominant large title font (including English continuation words like TensorFlow)
             if (maxZhH >= 12 && l.lineMaxH >= maxZhH - 2.5) {
                 zhLines.push(l.lineText);
+                if (l.y > maxZhY) maxZhY = l.y;
+                if (l.y < minZhY) minZhY = l.y;
+            }
+        }
+    }
+
+    // Select course code: prefer code badge located near title / metadata
+    if (codeBadges.length > 0) {
+        let validBadges = codeBadges;
+        if (maxZhY > 0) {
+            const nearTitleBadges = codeBadges.filter(cb => cb.y <= maxZhY + 12 && cb.y >= metaY - 5);
+            if (nearTitleBadges.length > 0) validBadges = nearTitleBadges;
+        }
+        for (const cb of validBadges) {
+            if (!code) {
+                code = cb.badge.str;
+            } else if (code.endsWith('-')) {
+                code = code + cb.badge.str;
             }
         }
     }
 
     // English subtitle lines: any line in header banner without Chinese characters that contains Latin letters
+    // If Chinese title exists, English subtitle must be positioned on or below Chinese title (l.y <= maxZhY + 3)
     for (const l of candidateLines) {
         if (zhLines.includes(l.lineText)) continue;
+        if (maxZhY > 0 && l.y > maxZhY + 3) continue; // Exclude top category / vendor headers above course title
         if (!/[\u4e00-\u9fa5]/.test(l.lineText) && /[A-Za-z]{2,}/.test(l.lineText) && l.lineText !== code) {
             enLines.push(l.lineText);
         }
@@ -1076,16 +1095,38 @@ function splitOutlineItems(text) {
  */
 function extractListItems(paragraphs, fullText) {
     // Pre-process paragraphs: split compound discount headers and concatenated discount schemes
-    const DISCOUNT_HEADER_SPLIT = /(?<=[^\s：:\n])\s*(?=(?:早鳥優惠|早鳥優惠價|限時優惠|專案優惠|續報優惠|學生優惠|學生優惠價|學生專屬優惠|企業優惠|原廠優惠|證照優惠|重聽服務|方案\s*[一二三四五六七八九十\d]+)[：:])/;
+    const DISCOUNT_HEADER_SPLIT = /(?<=[^\s：:\n])\s*(?=(?:早鳥優惠|早鳥優惠價|限時優惠|專案優惠|續報優惠|學生優惠|學生優惠價|學生專屬優惠|企業優惠|原廠優惠|證照優惠|重聽服務|重聽優惠|重聽優惠方案|總複習優惠|方案\s*[一二三四五六七八九十\d]+)[：:])/;
     if (paragraphs && paragraphs.length > 0) {
         paragraphs = paragraphs.flatMap(p => {
-            const m = p.match(/^((?:\d+[.、]\s*)?課程優惠方案[：:])\s*((?:早鳥|限時|專案|續報|學生|企業|方案)[^：:\n]{0,8}[：:][\s\S]+)$/);
+            const m = p.match(/^((?:\d+[.、]\s*)?課程優惠方案[：:])\s*((?:早鳥|限時|專案|續報|學生|企業|方案|總複習)[^：:\n]{0,8}[：:][\s\S]+)$/);
             if (m) return [m[1].trim(), ...m[2].trim().split(DISCOUNT_HEADER_SPLIT).map(s => s.trim()).filter(Boolean)];
             if (DISCOUNT_HEADER_SPLIT.test(p)) {
                 return p.split(DISCOUNT_HEADER_SPLIT).map(s => s.trim()).filter(Boolean);
             }
             return [p];
         });
+
+        // Merge standalone single-scheme headers (like 重聽優惠方案：) with their body text lines
+        const mergedHeaders = [];
+        for (let i = 0; i < paragraphs.length; i++) {
+            const cur = paragraphs[i].trim();
+            if (!cur) continue;
+            if (/^(?:\d+[.、]\s*)?(?:重聽優惠方案|重聽服務|重聽優惠)[：:]$/.test(cur)) {
+                let combined = cur;
+                while (i + 1 < paragraphs.length) {
+                    const next = paragraphs[i + 1].trim();
+                    if (BULLET_ITEM_PATTERN.test(next) || /(?:課程優惠方案|早鳥優惠|限時優惠|專案優惠|續報優惠|學生優惠|企業優惠|原廠優惠|證照優惠|總複習優惠|方案\s*[一二三四五六七八九十\d]+)[：:]/.test(next)) {
+                        break;
+                    }
+                    combined += (/[，,、]$/.test(combined) ? '' : '') + next;
+                    i++;
+                }
+                mergedHeaders.push(combined);
+            } else {
+                mergedHeaders.push(cur);
+            }
+        }
+        paragraphs = mergedHeaders;
     }
 
     let rawItems = [];
@@ -1102,7 +1143,7 @@ function extractListItems(paragraphs, fullText) {
         }
     }
     if (rawItems.length === 0 && fullText && fullText.trim()) {
-        const m = fullText.trim().match(/^((?:\d+[.、]\s*)?課程優惠方案[：:])\s*((?:早鳥|限時|專案|續報|學生|企業|方案)[^：:\n]{0,8}[：:][\s\S]+)$/);
+        const m = fullText.trim().match(/^((?:\d+[.、]\s*)?課程優惠方案[：:])\s*((?:早鳥|限時|專案|續報|學生|企業|方案|總複習)[^：:\n]{0,8}[：:][\s\S]+)$/);
         if (m) {
             rawItems = [m[1].trim(), ...splitOutlineItems(m[2].trim())];
         } else {
@@ -1733,6 +1774,11 @@ function alignListItems(wItems, pItems, fieldLabel) {
         if (sim >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm)) {
             return 1.0 + sim;
         }
+        const wNormNoUrl = wNorm.replace(/https?[a-z0-9_./-]+/gi, '');
+        const pNormNoUrl = pNorm.replace(/https?[a-z0-9_./-]+/gi, '');
+        if (wNormNoUrl.length >= 4 && (wNormNoUrl === pNormNoUrl || wNormNoUrl.includes(pNormNoUrl) || pNormNoUrl.includes(wNormNoUrl) || calculateSimilarity(wNormNoUrl, pNormNoUrl) >= 0.7)) {
+            return 1.5;
+        }
         return -1.0;
     }
 
@@ -1895,11 +1941,14 @@ function alignListItems(wItems, pItems, fieldLabel) {
         if (w && p) {
             const wNorm = normalizeText(cleanItemText(w));
             const pNorm = normalizeText(cleanItemText(p));
+            const wNormNoUrl = wNorm.replace(/https?[a-z0-9_./-]+/gi, '');
+            const pNormNoUrl = pNorm.replace(/https?[a-z0-9_./-]+/gi, '');
             if (wNorm === pNorm) {
                 matchCount++;
                 itemStatus = 'green';
                 itemDesc = '相符';
-            } else if (calculateSimilarity(wNorm, pNorm) >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm)) {
+            } else if (calculateSimilarity(wNorm, pNorm) >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm) ||
+                       (wNormNoUrl.length >= 4 && (wNormNoUrl === pNormNoUrl || wNormNoUrl.includes(pNormNoUrl) || pNormNoUrl.includes(wNormNoUrl) || calculateSimilarity(wNormNoUrl, pNormNoUrl) >= 0.7))) {
                 matchCount++;
                 hasYellow = true;
                 itemStatus = 'yellow';
