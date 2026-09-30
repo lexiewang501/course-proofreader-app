@@ -15,6 +15,8 @@ const KNOWN_LABELS = [
     '先修課程',
     '預備知識',
     '課程內容',
+    '課程大綱',
+    '課程介紹',
     '學會技能',
     '備註事項',
     '後續推薦課程'
@@ -527,7 +529,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
 
     let enTitle = enLines.join(' ').replace(/\s+/g, ' ').trim();
     if (code) {
-        enTitle = enTitle.replace(new RegExp(`^${code}[：:\\s]*`), '').trim();
+        enTitle = enTitle.replace(new RegExp(`^${code}(?:[：:\\s\\-]+|$)`, 'i'), '').trim();
     }
 
     if (!enTitle) {
@@ -686,6 +688,8 @@ async function parseDocx(buffer) {
             }
 
             if (matchedLabel) {
+                if (matchedLabel === '課程大綱') matchedLabel = '課程內容';
+                if (matchedLabel === '課程介紹') matchedLabel = '課程目標';
                 lastSectionLabel = matchedLabel;
                 const cellParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
                 const cellFull = row.slice(1).map(c => c.fullText).join(' ').trim();
@@ -922,7 +926,7 @@ async function parsePdf(buffer) {
                 if (wrappedItems.length > 0) {
                     wrappedItems.sort((a, b) => b.y - a.y || a.x - b.x);
                     const extraMat = wrappedItems.map(it => it.str).join(' ').trim();
-                    if (extraMat) {
+                    if (extraMat && (extraMat.startsWith('+') || /(?:教材|講義|書籍|電子書|環境|Lab|紙本|原廠)/.test(extraMat))) {
                         matVal = (matVal + (extraMat.startsWith('+') ? ' ' : ' ') + extraMat).trim();
                     }
                 }
@@ -949,14 +953,14 @@ async function parsePdf(buffer) {
                 const secItems = items.filter(it => it.x >= 88 && it.y > sec.effectiveBottom && it.y <= sec.effectiveTop);
                 secItems.sort((a, b) => b.y - a.y || a.x - b.x);
 
-                if (sec.label === '課程內容') {
+                if (sec.label === '課程內容' || sec.label === '課程大綱') {
                     course['課程內容'] = extractListFromPdfSection(secItems, false);
                 } else if (sec.label === '備註事項') {
                     course['備註事項'] = extractNotesFromPdfSection(secItems);
                 } else if (sec.label === '後續推薦課程') {
                     const fullText = secItems.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
                     course['後續推薦課程'] = splitRecommendedCourses(fullText);
-                } else if (sec.label === '課程目標') {
+                } else if (sec.label === '課程目標' || sec.label === '課程介紹') {
                     const lines = groupItemsIntoVisualLines(secItems);
                     const lineTexts = lines.map(l => l.text);
                     if (hasBulletMarkers(lineTexts) || getColumnSplits(secItems).length > 0) {
@@ -1429,7 +1433,7 @@ function extractListFromPdfSection(secItems, isNotes = false) {
 function sortListItems(items) {
     if (!items || items.length <= 1) return items;
     const numbered = items.map(it => {
-        const m = it.match(/^(\d+)[.、]/);
+        const m = it.match(/^(\d+)(?:[.、．]|\s+)/);
         return { num: m ? parseInt(m[1], 10) : null, text: it };
     });
     const nums = numbered.map(x => x.num).filter(n => n !== null);
@@ -1442,8 +1446,8 @@ function sortListItems(items) {
     }
 
     return [...items].sort((a, b) => {
-        const na = a.match(/^(\d+)[.、]/);
-        const nb = b.match(/^(\d+)[.、]/);
+        const na = a.match(/^(\d+)(?:[.、．]|\s+)/);
+        const nb = b.match(/^(\d+)(?:[.、．]|\s+)/);
         if (na && nb) return parseInt(na[1], 10) - parseInt(nb[1], 10);
         if (na) return -1;
         if (nb) return 1;
@@ -3224,8 +3228,11 @@ function exportCSVReport() {
 function normalizeText(str) {
     if (!str) return '';
     return str
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
         .replace(/[\s\r\n\t\u3000]+/g, '')
-        .replace(/[，,。.:：;；()（）「」『』"'\-／/＋+\\®™©]/g, '')
+        .replace(/[，,。.:：;；()（）「」『』"'\-／/＋+\\®™©&]/g, '')
         .toLowerCase();
 }
 
