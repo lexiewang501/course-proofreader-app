@@ -1799,6 +1799,10 @@ function alignListItems(wItems, pItems, fieldLabel) {
 
         while (end < aligned.length) {
             const cur = aligned[end];
+            // If cur is a structural module/chapter header, do not swallow it into an ongoing consolidation block
+            if ((wCount > 0 || pCount > 0) && ((cur.word && MODULE_HEADER_PATTERN.test(cur.word.trim())) || (cur.pdf && MODULE_HEADER_PATTERN.test(cur.pdf.trim())))) {
+                break;
+            }
             if (cur.word) { wCount++; wTexts.push(cur.word); }
             if (cur.pdf) { pCount++; pTexts.push(cur.pdf); }
 
