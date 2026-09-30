@@ -31,7 +31,7 @@ const LIST_FIELDS = new Set([
     '先修課程'
 ]);
 
-const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天分歲折元點門科題人個\d])|$)|[【\[]\d+[】\]]|[•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
+const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘)|$)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天歲折元點門科題人個\d]|分鐘)|$)|[【\[]\d+[】\]]|[•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
 
 // Global Application State
 const state = {
@@ -499,17 +499,18 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
     const zhCandidates = candidateLines.filter(l => /[\u4e00-\u9fa5]/.test(l.lineText));
     if (zhCandidates.length > 0) {
         const maxZhH = Math.max(...zhCandidates.map(l => l.lineMaxH));
-        for (const l of zhCandidates) {
-            // Only include lines matching the dominant title font size (filter out small font tags)
-            if (maxZhH >= 12 && l.lineMaxH < maxZhH - 3) {
-                continue;
+        for (const l of candidateLines) {
+            if (l.lineText === code) continue;
+            // Line has matching dominant large title font (including English continuation words like TensorFlow)
+            if (maxZhH >= 12 && l.lineMaxH >= maxZhH - 2.5) {
+                zhLines.push(l.lineText);
             }
-            zhLines.push(l.lineText);
         }
     }
 
     // English subtitle lines: any line in header banner without Chinese characters that contains Latin letters
     for (const l of candidateLines) {
+        if (zhLines.includes(l.lineText)) continue;
         if (!/[\u4e00-\u9fa5]/.test(l.lineText) && /[A-Za-z]{2,}/.test(l.lineText) && l.lineText !== code) {
             enLines.push(l.lineText);
         }
@@ -1059,7 +1060,7 @@ function splitInlineBullets(text) {
  */
 function splitOutlineItems(text) {
     if (!text) return [];
-    const parts = text.split(/(?=(?<=^|[\s\r\n])\d{1,2}[.、](?!\d)|\s*[•●※·◆▪＊★☆✦✧]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
+    const parts = text.split(/(?=(?<=^|[\s\r\n])\d{1,2}[.、](?!\d)|(?<=^|[\s\r\n])\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[•●※·◆▪＊★☆✦✧]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
     const res = [];
     for (const p of parts) {
         const trimmed = p.trim();
@@ -1087,25 +1088,43 @@ function extractListItems(paragraphs, fullText) {
         });
     }
 
-    let items = [];
+    let rawItems = [];
     if (paragraphs && paragraphs.length > 0) {
         for (const p of paragraphs) {
             const pTrimmed = p.trim();
             if (!pTrimmed) continue;
             const split = splitOutlineItems(pTrimmed);
             if (split.length > 1) {
-                items.push(...split);
+                rawItems.push(...split);
             } else {
-                items.push(pTrimmed);
+                rawItems.push(pTrimmed);
             }
         }
     }
-    if (items.length === 0 && fullText && fullText.trim()) {
+    if (rawItems.length === 0 && fullText && fullText.trim()) {
         const m = fullText.trim().match(/^((?:\d+[.、]\s*)?課程優惠方案[：:])\s*((?:早鳥|限時|專案|續報|學生|企業|方案)[^：:\n]{0,8}[：:][\s\S]+)$/);
         if (m) {
-            items = [m[1].trim(), ...splitOutlineItems(m[2].trim())];
+            rawItems = [m[1].trim(), ...splitOutlineItems(m[2].trim())];
         } else {
-            items = splitOutlineItems(fullText.trim());
+            rawItems = splitOutlineItems(fullText.trim());
+        }
+    }
+
+    // Assemble unnumbered continuation paragraphs into preceding numbered bullet item
+    let items = [];
+    for (let i = 0; i < rawItems.length; i++) {
+        const item = rawItems[i].trim();
+        if (!item) continue;
+        const isBullet = BULLET_ITEM_PATTERN.test(item);
+        const prevItem = items.length > 0 ? items[items.length - 1] : '';
+        const prevIsBullet = prevItem && BULLET_ITEM_PATTERN.test(prevItem);
+        if (isBullet) {
+            items.push(item);
+        } else if (prevIsBullet && !prevItem.endsWith('：') && !prevItem.endsWith(':')) {
+            // Unnumbered paragraph following a bullet item: append as body text
+            items[items.length - 1] += ' ' + item;
+        } else {
+            items.push(item);
         }
     }
     return items.map(it => it.trim()).filter(Boolean);
