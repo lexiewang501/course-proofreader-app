@@ -958,8 +958,14 @@ async function parsePdf(buffer) {
                     course['後續推薦課程'] = splitRecommendedCourses(fullText);
                 } else if (sec.label === '課程目標') {
                     const lines = groupItemsIntoVisualLines(secItems);
-                    const assembled = assembleLinesIntoItems(lines, false);
-                    course['課程目標'] = assembled.join('\n');
+                    const lineTexts = lines.map(l => l.text);
+                    if (hasBulletMarkers(lineTexts) || getColumnSplits(secItems).length > 0) {
+                        const assembled = extractListFromPdfSection(secItems, false);
+                        course['課程目標'] = assembled.join('\n');
+                    } else {
+                        const assembled = assembleLinesIntoItems(lines, false);
+                        course['課程目標'] = assembled.join('\n');
+                    }
                 } else if (sec.label === '適合對象' || sec.label === '預備知識' || sec.label === '先修課程') {
                     const lines = groupItemsIntoVisualLines(secItems);
                     const lineTexts = lines.map(l => l.text);
@@ -2425,8 +2431,10 @@ function compareSinglePair(w, p) {
             ? pContentText
             : pObjStr;
         const normPdfObj = normalizeText(objTextToCompare);
+        const normCleanWordObj = normalizeText(toCleanItemArray(wObjStr).map(cleanItemText).join(''));
+        const normCleanPdfObj = normalizeText(toCleanItemArray(objTextToCompare).map(cleanItemText).join(''));
 
-        if (wObjNorm === normPdfObj) {
+        if (wObjNorm === normPdfObj || (normCleanWordObj && normCleanWordObj === normCleanPdfObj)) {
             fields['課程目標'] = {
                 label: '課程目標',
                 layoutTag: 'adopted-objective',
@@ -2435,7 +2443,10 @@ function compareSinglePair(w, p) {
                 status: 'green',
                 desc: '課程目標完全相符 (本課採「課程目標」排版)'
             };
-        } else if (calculateSimilarity(wObjNorm, normPdfObj) > 0.70 || wObjNorm.includes(normPdfObj) || normPdfObj.includes(wObjNorm)) {
+        } else if (calculateSimilarity(wObjNorm, normPdfObj) > 0.70 ||
+                   calculateSimilarity(normCleanWordObj, normCleanPdfObj) > 0.70 ||
+                   wObjNorm.includes(normPdfObj) || normPdfObj.includes(wObjNorm) ||
+                   normCleanWordObj.includes(normCleanPdfObj) || normCleanPdfObj.includes(normCleanWordObj)) {
             fields['課程目標'] = {
                 label: '課程目標',
                 layoutTag: 'adopted-objective',
