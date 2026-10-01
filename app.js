@@ -902,6 +902,24 @@ async function parseDocx(buffer) {
                     const matMatch = rowFullText.match(/(?:^|[\s|｜])教材[：:\s]+([^|｜\n]+)/);
                     if (matMatch) course['教材'] = matMatch[1].trim();
                 }
+
+                // Fallback: cell containing 教材/講義/書籍/電子書 directly without "教材：" label (e.g. Aruba courses)
+                if (!course['教材']) {
+                    const directMatCell = row.find(c => {
+                        const txt = c.fullText.replace(/\s+/g, ' ').trim();
+                        if (!txt || txt.includes('時數') || txt.includes('費用') || txt.includes('點數')) return false;
+                        return /(?:教材|講義|書籍|電子書|環境|Lab|原廠)/.test(txt);
+                    });
+                    if (directMatCell) {
+                        course['教材'] = directMatCell.fullText.replace(/^教材[：:\s]*/, '').replace(/\s+/g, ' ').trim();
+                    } else {
+                        const segments = rowFullText.split(/[|｜]/).map(s => s.trim());
+                        const matSeg = segments.find(s => s && !s.includes('時數') && !s.includes('費用') && !s.includes('點數') && /(?:教材|講義|書籍|電子書|原廠)/.test(s));
+                        if (matSeg) {
+                            course['教材'] = matSeg.replace(/^教材[：:\s]*/, '').trim();
+                        }
+                    }
+                }
                 lastSectionLabel = null;
                 continue;
             }
