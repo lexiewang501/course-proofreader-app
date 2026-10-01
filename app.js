@@ -1731,9 +1731,10 @@ function splitRecommendedCourses(text, catalogTitles = []) {
         return trimmed.split(/[；;]+/).flatMap(s => splitRecommendedCourses(s, catalogTitles)).map(s => s.trim()).filter(Boolean);
     }
 
-    // 3. Embedded course code: preceded by non-ASCII (Chinese) or whitespace, followed by code + colon
-    if (/(?<=[^\x00-\x7F\s]|\s)(?=[A-Za-z0-9/_-]{2,12}\s*[：:])/.test(trimmed)) {
-        return trimmed.split(/(?<=[^\x00-\x7F\s]|\s)(?=[A-Za-z0-9/_-]{2,12}\s*[：:])/).flatMap(s => splitRecommendedCourses(s, catalogTitles)).map(s => s.trim()).filter(Boolean);
+    // 3. Embedded course code: preceded by non-ASCII (Chinese) or non-bullet word, followed by optional bullet + code + colon
+    const SPLIT_REC_REGEX = /(?<=[^\x00-\x7F\s])\s*(?=(?:\d+[.、]\s*)?[A-Za-z0-9/_-]{2,12}\s*[：:])|(?<=[^0-9\s.、()（）])\s+(?=(?:\d+[.、]\s*)?[A-Za-z0-9/_-]{2,12}\s*[：:])/;
+    if (SPLIT_REC_REGEX.test(trimmed)) {
+        return trimmed.split(SPLIT_REC_REGEX).flatMap(s => splitRecommendedCourses(s, catalogTitles)).map(s => s.trim()).filter(Boolean);
     }
 
     // 4. If catalogTitles provided, split by matching titles
@@ -1745,7 +1746,7 @@ function splitRecommendedCourses(text, catalogTitles = []) {
         let remaining = trimmed;
 
         while (remaining.length > 0) {
-            const codePrefixMatch = remaining.match(/^([A-Za-z0-9/_-]{2,12}\s*[：:\s]\s*)(.*)$/);
+            const codePrefixMatch = remaining.match(/^((?:\d+[.、]|\([0-9]+\))?\s*[A-Za-z0-9/_-]{2,12}\s*[：:\s]\s*)(.*)$/);
             let checkText = remaining;
             let codePrefix = '';
             if (codePrefixMatch) {
