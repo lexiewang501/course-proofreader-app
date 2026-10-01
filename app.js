@@ -2326,110 +2326,198 @@ async function runComparison() {
     }
 }
 
-function compareCourseData(wordCourses, pdfCourses) {
-    const results = [];
-    const matchedPdfIndices = new Set();
+function isValidCourseCode(c) {
+    if (!c) return false;
+    const s = String(c).trim().toLowerCase();
+    return s !== '' && s !== '未標註' && s !== '-' && s !== 'none' && s !== 'null';
+}
 
-    for (const wCourse of wordCourses) {
-        let bestPdf = null;
-        let bestIdx = -1;
+function cleanCourseCodeStr(c) {
+    return (c || '').replace(/[\s\-_/]/g, '').toLowerCase();
+}
+
+function isStrictCourseMatch(wCourse, pCourse) {
+    const wCode = (wCourse.course_code || wCourse['課程代碼'] || '').trim();
+    const pCode = (pCourse.course_code || pCourse['課程代碼'] || '').trim();
+    const hasWCode = isValidCourseCode(wCode);
+    const hasPCode = isValidCourseCode(pCode);
+
+    // Rule 1: If both have valid course codes and they differ -> CAN NEVER MATCH!
+    if (hasWCode && hasPCode) {
+        if (cleanCourseCodeStr(wCode) !== cleanCourseCodeStr(pCode)) {
+            return { matched: false, score: 0 };
+        }
+        return { matched: true, score: 1000, reason: 'code_exact' };
+    }
+
+    // Name matching
+    const wZh = normalizeText(wCourse.course_name_zh || wCourse['課程名稱'] || '');
+    const pZh = normalizeText(pCourse.course_name_zh || pCourse['課程名稱'] || '');
+    const wEn = normalizeText(wCourse.course_name_en || wCourse['英文名稱'] || '');
+    const pEn = normalizeText(pCourse.course_name_en || pCourse['英文名稱'] || '');
+
+    const stripParens = s => s.replace(/[（(][^）)]*[)）]/g, '').trim();
+    const wZhStrip = normalizeText(stripParens(wCourse.course_name_zh || wCourse['課程名稱'] || ''));
+    const pZhStrip = normalizeText(stripParens(pCourse.course_name_zh || pCourse['課程名稱'] || ''));
+
+    // Exact matches
+    if (wZh && pZh && wZh === pZh && wZh.length >= 2) return { matched: true, score: 500, reason: 'zh_exact' };
+    if (wZhStrip && pZhStrip && wZhStrip === pZhStrip && wZhStrip.length >= 2) return { matched: true, score: 450, reason: 'zh_strip_exact' };
+    if (wEn && pEn && wEn === pEn && wEn.length >= 4) return { matched: true, score: 400, reason: 'en_exact' };
+
+    // High confidence fuzzy match
+    const zhSim = (wZh && pZh) ? calculateSimilarity(wZh, pZh) : 0;
+    const zhStripSim = (wZhStrip && pZhStrip) ? calculateSimilarity(wZhStrip, pZhStrip) : 0;
+    const enSim = (wEn && pEn) ? calculateSimilarity(wEn, pEn) : 0;
+
+    const maxZhSim = Math.max(zhSim, zhStripSim);
+    const zhLenRatio = (wZh && pZh) ? (Math.min(wZh.length, pZh.length) / Math.max(wZh.length, pZh.length)) : 0;
+    const enLenRatio = (wEn && pEn) ? (Math.min(wEn.length, pEn.length) / Math.max(wEn.length, pEn.length)) : 0;
+
+    if (maxZhSim >= 0.85 && zhLenRatio >= 0.70) return { matched: true, score: 300 + maxZhSim * 50, reason: 'zh_fuzzy' };
+    if (enSim >= 0.85 && enLenRatio >= 0.75) return { matched: true, score: 250 + enSim * 50, reason: 'en_fuzzy' };
+
+    if (wZh && pZh && (wZh.includes(pZh) || pZh.includes(wZh)) && zhLenRatio >= 0.75 && Math.min(wZh.length, pZh.length) >= 5) {
+        return { matched: true, score: 200, reason: 'zh_substr' };
+    }
+
+    return { matched: false, score: 0 };
+}
+
+function compareCourseData(wordCourses, pdfCourses) {
+    const matchedWordIndices = new Set();
+    const matchedPdfIndices = new Set();
+    const pairs = [];
+
+    // Pass 1: Exact Course Code Match (when both have valid codes)
+    for (let wIdx = 0; wIdx < wordCourses.length; wIdx++) {
+        const w = wordCourses[wIdx];
+        const wCode = (w.course_code || w['課程代碼'] || '').trim();
+        if (!isValidCourseCode(wCode)) continue;
+
+        for (let pIdx = 0; pIdx < pdfCourses.length; pIdx++) {
+            if (matchedPdfIndices.has(pIdx)) continue;
+            const p = pdfCourses[pIdx];
+            const pCode = (p.course_code || p['課程代碼'] || '').trim();
+            if (!isValidCourseCode(pCode)) continue;
+
+            if (cleanCourseCodeStr(wCode) === cleanCourseCodeStr(pCode)) {
+                matchedWordIndices.add(wIdx);
+                matchedPdfIndices.add(pIdx);
+                pairs.push({ wCourse: w, pCourse: p, pass: 1, reason: 'code_exact' });
+                break;
+            }
+        }
+    }
+
+    // Pass 2: Exact Name Match (ZH or EN or stripped ZH), strictly forbidding code conflict
+    for (let wIdx = 0; wIdx < wordCourses.length; wIdx++) {
+        if (matchedWordIndices.has(wIdx)) continue;
+        const w = wordCourses[wIdx];
+        const wCode = (w.course_code || w['課程代碼'] || '').trim();
+        const hasWCode = isValidCourseCode(wCode);
+
+        let bestPIdx = -1;
         let bestScore = 0;
 
-        const wCode = (wCourse.course_code || wCourse['課程代碼'] || '').trim().toLowerCase();
-        const wZh = normalizeText(wCourse.course_name_zh || wCourse['課程名稱'] || '');
-        const wEn = normalizeText(wCourse.course_name_en || wCourse['英文名稱'] || '');
+        for (let pIdx = 0; pIdx < pdfCourses.length; pIdx++) {
+            if (matchedPdfIndices.has(pIdx)) continue;
+            const p = pdfCourses[pIdx];
+            const pCode = (p.course_code || p['課程代碼'] || '').trim();
+            const hasPCode = isValidCourseCode(pCode);
 
-        for (let i = 0; i < pdfCourses.length; i++) {
-            if (matchedPdfIndices.has(i)) continue;
-            const p = pdfCourses[i];
+            // Strict code conflict check: different codes can NEVER match
+            if (hasWCode && hasPCode && cleanCourseCodeStr(wCode) !== cleanCourseCodeStr(pCode)) continue;
 
-            const pCode = (p.course_code || p['課程代碼'] || '').trim().toLowerCase();
-            const pZh = normalizeText(p.course_name_zh || p['課程名稱'] || '');
-            const pEn = normalizeText(p.course_name_en || p['英文名稱'] || '');
-
-            // Anchor 1: 課程代碼完全一致 (如 CCNA, AZ-104, BCIC, iFCI)
-            const codeMatch = wCode && pCode && (wCode === pCode);
-
-            // Anchor 2: 英文課名完全相符或相似度 > 85% (忽略大小寫與前後符號)
-            let enSim = 0;
-            let enMatch = false;
-            if (wEn && pEn) {
-                if (wEn === pEn) {
-                    enMatch = true;
-                    enSim = 1.0;
-                } else {
-                    enSim = calculateSimilarity(wEn, pEn);
-                    if (enSim > 0.85 || wEn.includes(pEn) || pEn.includes(wEn)) {
-                        enMatch = true;
-                    }
-                }
-            }
-
-            // Anchor 3: 中文名稱相似度 > 80%
-            let zhSim = 0;
-            let zhMatch = false;
-            if (wZh && pZh) {
-                if (wZh === pZh) {
-                    zhMatch = true;
-                    zhSim = 1.0;
-                } else {
-                    zhSim = calculateSimilarity(wZh, pZh);
-                    if (zhSim > 0.80 || wZh.includes(pZh) || pZh.includes(wZh)) {
-                        zhMatch = true;
-                    }
-                }
-            }
-
-            if (codeMatch || enMatch || zhMatch) {
-                let score = 0;
-                if (codeMatch) score += 100;
-                if (enMatch) score += 90 + enSim * 5;
-                if (zhMatch) score += 80 + zhSim * 5;
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestPdf = p;
-                    bestIdx = i;
-                }
+            const res = isStrictCourseMatch(w, p);
+            if (res.matched && res.score >= 400 && res.score > bestScore) {
+                bestScore = res.score;
+                bestPIdx = pIdx;
             }
         }
 
-        if (bestPdf) {
-            matchedPdfIndices.add(bestIdx);
-            results.push(compareSinglePair(wCourse, bestPdf));
-        } else {
-            // Missing in PDF
-            const wNameZh = wCourse.course_name_zh || wCourse['課程名稱'] || '';
-            const wNameEn = wCourse.course_name_en || wCourse['英文名稱'] || '';
-            const wCodeVal = wCourse.course_code || wCourse['課程代碼'] || '未標註';
+        if (bestPIdx !== -1) {
+            matchedWordIndices.add(wIdx);
+            matchedPdfIndices.add(bestPIdx);
+            pairs.push({ wCourse: w, pCourse: pdfCourses[bestPIdx], pass: 2, reason: 'name_exact' });
+        }
+    }
+
+    // Pass 3: High Confidence Fuzzy Name Match, strictly forbidding code conflict
+    for (let wIdx = 0; wIdx < wordCourses.length; wIdx++) {
+        if (matchedWordIndices.has(wIdx)) continue;
+        const w = wordCourses[wIdx];
+        const wCode = (w.course_code || w['課程代碼'] || '').trim();
+        const hasWCode = isValidCourseCode(wCode);
+
+        let bestPIdx = -1;
+        let bestScore = 0;
+
+        for (let pIdx = 0; pIdx < pdfCourses.length; pIdx++) {
+            if (matchedPdfIndices.has(pIdx)) continue;
+            const p = pdfCourses[pIdx];
+            const pCode = (p.course_code || p['課程代碼'] || '').trim();
+            const hasPCode = isValidCourseCode(pCode);
+
+            // Strict code conflict check: different codes can NEVER match
+            if (hasWCode && hasPCode && cleanCourseCodeStr(wCode) !== cleanCourseCodeStr(pCode)) continue;
+
+            const res = isStrictCourseMatch(w, p);
+            if (res.matched && res.score > bestScore) {
+                bestScore = res.score;
+                bestPIdx = pIdx;
+            }
+        }
+
+        if (bestPIdx !== -1) {
+            matchedWordIndices.add(wIdx);
+            matchedPdfIndices.add(bestPIdx);
+            pairs.push({ wCourse: w, pCourse: pdfCourses[bestPIdx], pass: 3, reason: 'fuzzy' });
+        }
+    }
+
+    const results = [];
+    // 1. Matched pairs
+    for (const pair of pairs) {
+        results.push(compareSinglePair(pair.wCourse, pair.pCourse));
+    }
+
+    // 2. Unmatched Word courses (PDF 漏排此課程)
+    for (let wIdx = 0; wIdx < wordCourses.length; wIdx++) {
+        if (!matchedWordIndices.has(wIdx)) {
+            const w = wordCourses[wIdx];
+            const wNameZh = w.course_name_zh || w['課程名稱'] || '';
+            const wNameEn = w.course_name_en || w['英文名稱'] || '';
+            const wCodeVal = w.course_code || w['課程代碼'] || '未標註';
 
             results.push({
                 status: 'gray',
-                statusText: 'PDF 排版漏排此課程',
+                missingType: 'missing_in_pdf',
+                statusText: '【PDF 漏排此課程】Word 原稿有，但美編排版找不到此課！',
                 code: wCodeVal,
                 name: wNameZh || wNameEn,
                 nameZh: wNameZh,
                 nameEn: wNameEn,
-                wordCourse: wCourse,
+                wordCourse: w,
                 pdfCourse: null,
                 fields: {
-                    '中文課名': { status: 'gray', label: '中文課名', word: wNameZh || '-', pdf: '(未找到)', desc: 'PDF 缺少此課程' },
-                    '英文課名': { status: 'gray', label: '英文課名', word: wNameEn || '-', pdf: '(未找到)', desc: 'PDF 缺少此課程' },
-                    '課程名稱': { status: 'gray', label: '中文課名', word: wNameZh || '-', pdf: '(未找到)', desc: 'PDF 缺少此課程' },
-                    '英文名稱': { status: 'gray', label: '英文課名', word: wNameEn || '-', pdf: '(未找到)', desc: 'PDF 缺少此課程' },
-                    '課程代碼': { status: 'gray', label: '課程代碼', word: wCodeVal, pdf: '-', desc: '缺少' },
-                    '時數': { status: 'gray', label: '時數', word: `${wCourse['時數']} 小時`, pdf: '-', desc: '缺少' },
-                    '點數': { status: 'gray', label: '點數', word: `${wCourse['點數']} 點`, pdf: '-', desc: '缺少' },
-                    '費用': { status: 'gray', label: '費用', word: `${Number(wCourse['費用'] || 0).toLocaleString()} 元`, pdf: '-', desc: '缺少' },
-                    '教材': { status: 'gray', label: '教材', word: wCourse['教材'] || '-', pdf: '-', desc: '缺少' },
-                    '課程內容': createMissingListField('課程內容', wCourse['課程內容'], true),
-                    '備註事項': createMissingListField('備註事項', wCourse['備註事項'], true),
-                    '後續推薦課程': createMissingListField('後續推薦課程', wCourse['後續推薦課程'], true),
-                    '適合對象': createMissingListField('適合對象', wCourse['適合對象'], true),
-                    '預備知識': createMissingListField('預備知識', wCourse['預備知識'], true),
-                    '先修課程': createMissingListField('先修課程', wCourse['先修課程'], true),
-                    '課程目標': { status: 'gray', label: '課程目標', word: (Array.isArray(wCourse['課程目標']) ? wCourse['課程目標'].join('\n') : wCourse['課程目標']) || '-', pdf: '-', desc: '缺少' },
-                    '學會技能': { status: 'gray', label: '學會技能', word: (Array.isArray(wCourse['學會技能']) ? wCourse['學會技能'].join('\n') : wCourse['學會技能']) || '-', pdf: '-', desc: '缺少' }
+                    '課程代碼': { status: 'gray', label: '課程代碼', word: wCodeVal, pdf: '(PDF 漏排)', desc: 'PDF 缺少此課程' },
+                    '中文課名': { status: 'gray', label: '中文課名', word: wNameZh || '-', pdf: '(PDF 漏排)', desc: 'PDF 缺少此課程' },
+                    '英文課名': { status: 'gray', label: '英文課名', word: wNameEn || '-', pdf: '(PDF 漏排)', desc: 'PDF 缺少此課程' },
+                    '課程名稱': { status: 'gray', label: '中文課名', word: wNameZh || '-', pdf: '(PDF 漏排)', desc: 'PDF 缺少此課程' },
+                    '英文名稱': { status: 'gray', label: '英文課名', word: wNameEn || '-', pdf: '(PDF 漏排)', desc: 'PDF 缺少此課程' },
+                    '時數': { status: 'gray', label: '時數', word: `${w['時數']} 小時`, pdf: '-', desc: 'PDF 漏排' },
+                    '點數': { status: 'gray', label: '點數', word: `${w['點數']} 點`, pdf: '-', desc: 'PDF 漏排' },
+                    '費用': { status: 'gray', label: '費用', word: `${Number(w['費用'] || 0).toLocaleString()} 元`, pdf: '-', desc: 'PDF 漏排' },
+                    '教材': { status: 'gray', label: '教材', word: w['教材'] || '-', pdf: '-', desc: 'PDF 漏排' },
+                    '課程內容': createMissingListField('課程內容', w['課程內容'], true),
+                    '備註事項': createMissingListField('備註事項', w['備註事項'], true),
+                    '後續推薦課程': createMissingListField('後續推薦課程', w['後續推薦課程'], true),
+                    '適合對象': createMissingListField('適合對象', w['適合對象'], true),
+                    '預備知識': createMissingListField('預備知識', w['預備知識'], true),
+                    '先修課程': createMissingListField('先修課程', w['先修課程'], true),
+                    '課程目標': { status: 'gray', label: '課程目標', word: (Array.isArray(w['課程目標']) ? w['課程目標'].join('\n') : w['課程目標']) || '-', pdf: '-', desc: 'PDF 漏排' },
+                    '學會技能': { status: 'gray', label: '學會技能', word: (Array.isArray(w['學會技能']) ? w['學會技能'].join('\n') : w['學會技能']) || '-', pdf: '-', desc: 'PDF 漏排' }
                 },
                 layoutMode: 'none',
                 layoutModeText: 'PDF 漏排此課程'
@@ -2437,41 +2525,42 @@ function compareCourseData(wordCourses, pdfCourses) {
         }
     }
 
-    // Check for extra courses in PDF not in Word
-    for (let i = 0; i < pdfCourses.length; i++) {
-        if (!matchedPdfIndices.has(i)) {
-            const pCourse = pdfCourses[i];
-            const pNameZh = pCourse.course_name_zh || pCourse['課程名稱'] || '';
-            const pNameEn = pCourse.course_name_en || pCourse['英文名稱'] || '';
-            const pCodeVal = pCourse.course_code || pCourse['課程代碼'] || '未標註';
+    // 3. Unmatched PDF courses (Word 原稿無此課程 - PDF 多出)
+    for (let pIdx = 0; pIdx < pdfCourses.length; pIdx++) {
+        if (!matchedPdfIndices.has(pIdx)) {
+            const p = pdfCourses[pIdx];
+            const pNameZh = p.course_name_zh || p['課程名稱'] || '';
+            const pNameEn = p.course_name_en || p['英文名稱'] || '';
+            const pCodeVal = p.course_code || p['課程代碼'] || '未標註';
 
             results.push({
                 status: 'gray',
-                statusText: 'Word 原稿無此課程 (PDF 多出)',
+                missingType: 'missing_in_word',
+                statusText: '【Word 原稿無此課】PDF 排版有，但 Word 原稿找不到此課！',
                 code: pCodeVal,
                 name: pNameZh || pNameEn,
                 nameZh: pNameZh,
                 nameEn: pNameEn,
                 wordCourse: null,
-                pdfCourse: pCourse,
+                pdfCourse: p,
                 fields: {
-                    '中文課名': { status: 'gray', label: '中文課名', word: '(未找到)', pdf: pNameZh || '-', desc: 'Word 原稿未列出此課' },
-                    '英文課名': { status: 'gray', label: '英文課名', word: '(未找到)', pdf: pNameEn || '-', desc: 'Word 原稿未列出此課' },
-                    '課程名稱': { status: 'gray', label: '中文課名', word: '(未找到)', pdf: pNameZh || '-', desc: 'Word 原稿未列出此課' },
-                    '英文名稱': { status: 'gray', label: '英文課名', word: '(未找到)', pdf: pNameEn || '-', desc: 'Word 原稿未列出此課' },
-                    '課程代碼': { status: 'gray', label: '課程代碼', word: '-', pdf: pCodeVal, desc: '原稿無' },
-                    '時數': { status: 'gray', label: '時數', word: '-', pdf: `${pCourse['時數']} 小時`, desc: '原稿無' },
-                    '點數': { status: 'gray', label: '點數', word: '-', pdf: `${pCourse['點數']} 點`, desc: '原稿無' },
-                    '費用': { status: 'gray', label: '費用', word: '-', pdf: `${Number(pCourse['費用'] || 0).toLocaleString()} 元`, desc: '原稿無' },
-                    '教材': { status: 'gray', label: '教材', word: '-', pdf: pCourse['教材'] || '-', desc: '原稿無' },
-                    '課程內容': createMissingListField('課程內容', pCourse['課程內容'], false),
-                    '備註事項': createMissingListField('備註事項', pCourse['備註事項'], false),
-                    '後續推薦課程': createMissingListField('後續推薦課程', pCourse['後續推薦課程'], false),
-                    '適合對象': createMissingListField('適合對象', pCourse['適合對象'], false),
-                    '預備知識': createMissingListField('預備知識', pCourse['預備知識'], false),
-                    '先修課程': createMissingListField('先修課程', pCourse['先修課程'], false),
-                    '課程目標': { status: 'gray', label: '課程目標', word: '-', pdf: (Array.isArray(pCourse['課程目標']) ? pCourse['課程目標'].join('\n') : pCourse['課程目標']) || '-', desc: '原稿無' },
-                    '學會技能': { status: 'gray', label: '學會技能', word: '-', pdf: (Array.isArray(pCourse['學會技能']) ? pCourse['學會技能'].join('\n') : pCourse['學會技能']) || '-', desc: '原稿無' }
+                    '課程代碼': { status: 'gray', label: '課程代碼', word: '(Word 原稿無)', pdf: pCodeVal, desc: 'Word 原稿無此課程' },
+                    '中文課名': { status: 'gray', label: '中文課名', word: '(Word 原稿無)', pdf: pNameZh || '-', desc: 'Word 原稿無此課程' },
+                    '英文課名': { status: 'gray', label: '英文課名', word: '(Word 原稿無)', pdf: pNameEn || '-', desc: 'Word 原稿無此課程' },
+                    '課程名稱': { status: 'gray', label: '中文課名', word: '(Word 原稿無)', pdf: pNameZh || '-', desc: 'Word 原稿無此課程' },
+                    '英文名稱': { status: 'gray', label: '英文課名', word: '(Word 原稿無)', pdf: pNameEn || '-', desc: 'Word 原稿無此課程' },
+                    '時數': { status: 'gray', label: '時數', word: '-', pdf: `${p['時數']} 小時`, desc: '原稿無' },
+                    '點數': { status: 'gray', label: '點數', word: '-', pdf: `${p['點數']} 點`, desc: '原稿無' },
+                    '費用': { status: 'gray', label: '費用', word: '-', pdf: `${Number(p['費用'] || 0).toLocaleString()} 元`, desc: '原稿無' },
+                    '教材': { status: 'gray', label: '教材', word: '-', pdf: p['教材'] || '-', desc: '原稿無' },
+                    '課程內容': createMissingListField('課程內容', p['課程內容'], false),
+                    '備註事項': createMissingListField('備註事項', p['備註事項'], false),
+                    '後續推薦課程': createMissingListField('後續推薦課程', p['後續推薦課程'], false),
+                    '適合對象': createMissingListField('適合對象', p['適合對象'], false),
+                    '預備知識': createMissingListField('預備知識', p['預備知識'], false),
+                    '先修課程': createMissingListField('先修課程', p['先修課程'], false),
+                    '課程目標': { status: 'gray', label: '課程目標', word: '-', pdf: (Array.isArray(p['課程目標']) ? p['課程目標'].join('\n') : p['課程目標']) || '-', desc: '原稿無' },
+                    '學會技能': { status: 'gray', label: '學會技能', word: '-', pdf: (Array.isArray(p['學會技能']) ? p['學會技能'].join('\n') : p['學會技能']) || '-', desc: '原稿無' }
                 },
                 layoutMode: 'none',
                 layoutModeText: 'Word 原稿無此課程'
@@ -3252,6 +3341,51 @@ function renderCourseCards() {
         elements.emptyFilterView.classList.add('hidden');
     }
 
+    // If there are missing courses, show a high-visibility summary banner at top
+    const missingPdf = state.comparisons.filter(c => c.status === 'gray' && c.missingType === 'missing_in_pdf');
+    const missingWord = state.comparisons.filter(c => c.status === 'gray' && c.missingType === 'missing_in_word');
+    if ((missingPdf.length > 0 || missingWord.length > 0) && (!query && (filter === 'all' || filter === 'gray'))) {
+        const banner = document.createElement('div');
+        banner.className = 'p-4 rounded-xl border border-amber-300 bg-amber-50 shadow-xs space-y-2.5 mb-6';
+        banner.innerHTML = `
+            <div class="flex items-start gap-3">
+                <svg class="w-5 h-5 text-amber-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                </svg>
+                <div class="flex-1 space-y-2">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div class="font-bold text-amber-950 text-sm flex items-center gap-2">
+                            <span>⚠️ 雙方課程名單核對警示：發現 ${missingPdf.length + missingWord.length} 門課程在某一邊完全找不到！</span>
+                        </div>
+                        <span class="text-3xs font-mono font-bold px-2 py-0.5 rounded bg-amber-200 text-amber-900">單邊缺漏隔離中</span>
+                    </div>
+                    <div class="text-xs text-amber-900 space-y-1.5 leading-relaxed">
+                        ${missingPdf.length > 0 ? `
+                            <div class="flex items-start gap-1.5">
+                                <span class="font-bold text-red-700 whitespace-nowrap">● 【PDF 漏排此課程】(${missingPdf.length} 門)：</span>
+                                <div class="text-slate-800 font-medium">
+                                    Word 原稿中有列出，但 PDF 完全未排入：${missingPdf.map(m => `<span class="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-amber-100 text-amber-900 font-mono font-bold text-3xs border border-amber-300">${m.code} ${m.name}</span>`).join('、')}
+                                </div>
+                            </div>
+                        ` : ''}
+                        ${missingWord.length > 0 ? `
+                            <div class="flex items-start gap-1.5">
+                                <span class="font-bold text-indigo-800 whitespace-nowrap">● 【Word 原稿無此課程】(${missingWord.length} 門)：</span>
+                                <div class="text-slate-800 font-medium">
+                                    PDF 排版有此課，但 Word 原稿中找不到：${missingWord.map(m => `<span class="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-indigo-100 text-indigo-900 font-mono font-bold text-3xs border border-indigo-200">${m.code} ${m.name}</span>`).join('、')}
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                    <div class="text-3xs text-amber-800/80 pt-0.5 border-t border-amber-200/60">
+                        為避免造成誤導，系統已自動將上述缺漏課程獨立標示為「缺漏項目」，未將其與其他課程強行湊合（避免產生滿版紅字錯誤）。
+                    </div>
+                </div>
+            </div>
+        `;
+        container.appendChild(banner);
+    }
+
     filtered.forEach((item, idx) => {
         const card = createCourseCard(item, idx);
         container.appendChild(card);
@@ -3263,7 +3397,7 @@ function createCourseCard(item, idx) {
     card.className = `course-card bg-white rounded-2xl border shadow-xs transition overflow-hidden ${
         item.status === 'red' ? 'border-red-300 ring-1 ring-red-400/20' :
         item.status === 'yellow' ? 'border-amber-300' :
-        item.status === 'gray' ? 'border-slate-300 bg-slate-50/50' : 'border-slate-200'
+        item.status === 'gray' ? (item.missingType === 'missing_in_pdf' ? 'border-amber-300 ring-1 ring-amber-400/30' : (item.missingType === 'missing_in_word' ? 'border-indigo-300 ring-1 ring-indigo-400/20' : 'border-slate-300 bg-slate-50/50')) : 'border-slate-200'
     }`;
 
     // Header Badge info
@@ -3596,7 +3730,33 @@ function createCourseCard(item, idx) {
         </div>
     `;
 
+    let missingBannerHtml = '';
+    if (item.status === 'gray') {
+        if (item.missingType === 'missing_in_pdf') {
+            missingBannerHtml = `
+                <div class="px-5 py-3 bg-amber-100/90 border-b border-amber-200 flex items-center justify-between gap-3 text-xs font-bold text-amber-950">
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4 text-amber-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path></svg>
+                        <span>⚠️ 【PDF 漏排此課程】Word 原稿有此課程，但美編 PDF 排版中完全未找到此課！請通知美編補排。</span>
+                    </div>
+                    <span class="text-3xs font-mono font-bold px-2 py-0.5 rounded bg-amber-200 text-amber-900 flex-shrink-0">PDF 漏排</span>
+                </div>
+            `;
+        } else if (item.missingType === 'missing_in_word') {
+            missingBannerHtml = `
+                <div class="px-5 py-3 bg-indigo-50 border-b border-indigo-200 flex items-center justify-between gap-3 text-xs font-bold text-indigo-950">
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4 text-indigo-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"></path></svg>
+                        <span>ℹ️ 【Word 原稿無此課程】PDF 排版有此課，但 Word 原稿中未找到此課（可能為多排、舊課殘留或獨立排版）。</span>
+                    </div>
+                    <span class="text-3xs font-mono font-bold px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 flex-shrink-0">Word 原稿無</span>
+                </div>
+            `;
+        }
+    }
+
     card.innerHTML = `
+        ${missingBannerHtml}
         <div class="p-5 flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-slate-100 bg-slate-50/40">
             <div class="flex items-start space-x-3.5 flex-1 min-w-0">
                 <span class="mt-0.5 px-2.5 py-1.5 rounded-lg text-xs font-bold font-mono tracking-wide flex-shrink-0 ${
@@ -3728,10 +3888,23 @@ function copyErrorReport() {
     }
 
     if (grayItems.length > 0) {
-        report += `⚪ 【遺漏或多排課程 (${grayItems.length} 門課程)】：\n`;
-        grayItems.forEach((item, i) => {
-            report += `${i + 1}. 【${item.code}】${item.name} ➔ ${item.statusText}\n`;
-        });
+        const missingPdf = grayItems.filter(item => item.missingType === 'missing_in_pdf');
+        const missingWord = grayItems.filter(item => item.missingType === 'missing_in_word');
+
+        report += `⚪ 【雙方課程清單缺漏警示 (共 ${grayItems.length} 門未對齊)】：\n`;
+        if (missingPdf.length > 0) {
+            report += `  ⚠️ 【Word 原稿有，但美編 PDF 漏排此課程 (${missingPdf.length} 門)】（待補排）：\n`;
+            missingPdf.forEach((item, i) => {
+                report += `     ${i + 1}. 【${item.code}】${item.name} ➔ PDF 排版漏排此門課！\n`;
+            });
+        }
+        if (missingWord.length > 0) {
+            report += `  ℹ️ 【美編 PDF 有，但 Word 原稿無此課程 (${missingWord.length} 門)】（多排或獨立排版）：\n`;
+            missingWord.forEach((item, i) => {
+                const pageStr = item.pdfCourse && item.pdfCourse.page ? ` (頁數：P.${item.pdfCourse.page})` : '';
+                report += `     ${i + 1}. 【${item.code}】${item.name}${pageStr} ➔ Word 原稿無此課\n`;
+            });
+        }
         report += `\n`;
     }
 
@@ -3800,6 +3973,14 @@ function exportCSVReport() {
             }
         }
 
+        if (c.status === 'gray') {
+            if (c.missingType === 'missing_in_pdf') {
+                errDescs.push('【嚴重缺漏】Word 原稿有此課，但 PDF 排版完全漏排此課程');
+            } else if (c.missingType === 'missing_in_word') {
+                errDescs.push('【提醒】PDF 排版有此課，但 Word 原稿中未列出此課');
+            }
+        }
+
         const zhF = fields['中文課名'] || fields['課程名稱'] || {};
         const enF = fields['英文課名'] || fields['英文名稱'] || {};
 
@@ -3811,7 +3992,10 @@ function exportCSVReport() {
             `"${(enF.word || '').replace(/"/g, '""')}"`,
             `"${(enF.pdf || '').replace(/"/g, '""')}"`,
             enF.desc || '',
-            c.status === 'green' ? '相符' : c.status === 'red' ? '錯誤' : c.status === 'yellow' ? '提醒' : '遺漏',
+            c.status === 'green' ? '相符' :
+            c.status === 'red' ? '錯誤' :
+            c.status === 'yellow' ? '提醒' :
+            (c.missingType === 'missing_in_pdf' ? 'PDF漏排' : (c.missingType === 'missing_in_word' ? 'Word無此課' : '缺漏')),
             c.layoutModeText || '',
             fields['時數'] ? fields['時數'].word : '',
             fields['時數'] ? fields['時數'].pdf : '',
@@ -3861,15 +4045,20 @@ function normalizeText(str) {
 function calculateSimilarity(s1, s2) {
     if (!s1 || !s2) return 0;
     if (s1 === s2) return 1;
-    const longer = s1.length > s2.length ? s1 : s2;
-    const shorter = s1.length > s2.length ? s2 : s1;
-    if (longer.length === 0) return 1.0;
+    const len1 = s1.length, len2 = s2.length;
+    const maxLen = Math.max(len1, len2);
+    if (maxLen === 0) return 1.0;
 
-    let matches = 0;
-    for (let i = 0; i < shorter.length; i++) {
-        if (longer.includes(shorter[i])) matches++;
+    const d = [];
+    for (let i = 0; i <= len1; i++) d[i] = [i];
+    for (let j = 0; j <= len2; j++) d[0][j] = j;
+    for (let i = 1; i <= len1; i++) {
+        for (let j = 1; j <= len2; j++) {
+            const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+            d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+        }
     }
-    return matches / longer.length;
+    return 1 - (d[len1][len2] / maxLen);
 }
 
 function showToast(message, isError = false) {
