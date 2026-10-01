@@ -2627,9 +2627,17 @@ function compareCourseData(wordCourses, pdfCourses) {
             });
 
             const isDuplicate = !!alreadyMatchedPair;
-            const earlierPage = (alreadyMatchedPair && alreadyMatchedPair.pCourse && alreadyMatchedPair.pCourse.page)
-                ? ` (前次出現於 PDF 第 ${alreadyMatchedPair.pCourse.page} 頁)`
-                : '';
+            const otherCode = (alreadyMatchedPair && alreadyMatchedPair.pCourse) ? (alreadyMatchedPair.pCourse.course_code || alreadyMatchedPair.pCourse['課程代碼'] || '') : '';
+            const otherPage = (alreadyMatchedPair && alreadyMatchedPair.pCourse && alreadyMatchedPair.pCourse.page) ? alreadyMatchedPair.pCourse.page : null;
+            const codeDiffNote = (otherCode && otherCode !== pCodeVal) ? `，另筆代碼為 ${otherCode}` : '';
+            let earlierPage = '';
+            if (otherPage !== null) {
+                if (otherPage === p.page) {
+                    earlierPage = ` (同在 PDF 第 ${p.page} 頁重複排了 2 次${codeDiffNote})`;
+                } else {
+                    earlierPage = ` (前次出現於 PDF 第 ${otherPage} 頁${codeDiffNote})`;
+                }
+            }
 
             const missingType = isDuplicate ? 'duplicate_in_pdf' : 'missing_in_word';
             const statusText = isDuplicate
@@ -3470,7 +3478,7 @@ function renderCourseCards() {
                             <div class="flex items-start gap-1.5">
                                 <span class="font-bold text-rose-700 whitespace-nowrap">● 🚨 【PDF 重複排版】(${duplicatePdf.length} 門)：</span>
                                 <div class="text-slate-800 font-medium">
-                                    同一門課在 PDF 中出現多次：${duplicatePdf.map(m => `<span class="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-rose-100 text-rose-900 font-mono font-bold text-3xs border border-rose-300">${m.code} ${m.name}</span>`).join('、')}
+                                    同一門課在 PDF 中出現多次：${duplicatePdf.map(m => `<span class="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-rose-100 text-rose-900 font-mono font-bold text-3xs border border-rose-300">${m.code} ${m.name}</span>${m.statusText ? `<span class="text-rose-700 font-semibold">${m.statusText.replace(/^【[^】]+】/, '')}</span>` : ''}`).join('； ')}
                                 </div>
                             </div>
                         ` : ''}
@@ -3856,7 +3864,7 @@ function createCourseCard(item, idx) {
                 <div class="px-5 py-3 bg-rose-100/90 border-b border-rose-200 flex items-center justify-between gap-3 text-xs font-bold text-rose-950">
                     <div class="flex items-center gap-2">
                         <svg class="w-4 h-4 text-rose-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path></svg>
-                        <span>🚨 【PDF 重複排版警告】此課程在 PDF 中已排版過，但在此頁又重複排了一次！Word 原稿僅有 1 門課程，請美編確認是否為版面殘留或贅課。</span>
+                        <span>🚨 【PDF 重複排版警告】${item.statusText ? item.statusText.replace(/^【[^】]+】/, '') : '此課程在 PDF 中已排版過，但在此頁又重複排了一次！Word 原稿僅有 1 門課程，請美編確認是否為版面殘留或贅課。'}</span>
                     </div>
                     <span class="text-3xs font-mono font-bold px-2 py-0.5 rounded bg-rose-200 text-rose-900 flex-shrink-0">PDF 重複排版</span>
                 </div>
