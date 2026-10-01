@@ -31,8 +31,8 @@ const LIST_FIELDS = new Set([
     '先修課程'
 ]);
 
-const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘)|$)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天歲折元點門科題人個\d]|分鐘)|$)|[【\[]\d+[】\]]|[\uf06c\uf06e\uf075•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
-const MODULE_HEADER_PATTERN = /^(?:[\uf06c\uf06e\uf075•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼-]\s*)?(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+/i;
+const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\b\d{1,2}-\d{1,3}(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘)|$)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天歲折元點門科題人個\d]|分鐘)|$)|[【\[]\d+[】\]]|[\uf06c\uf06e\uf075•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
+const MODULE_HEADER_PATTERN = /^(?:[\uf06c\uf06e\uf075•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼-]\s*)?(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+/i;
 
 // Global Application State
 const state = {
@@ -416,6 +416,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         const contentItems = line.filter(it => it !== leftBadge);
         if (contentItems.length === 0) continue;
 
+        const contentMaxH = Math.max(...contentItems.map(it => it.h || 0));
         const lineText = contentItems.map(it => it.str).join(' ').trim();
         if (lineText.includes('課程簡介') || 
             lineText.includes('各地開課時間') || 
@@ -426,8 +427,8 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
             lineText === 'EPI' ||
             lineText === 'PMI' ||
             lineText.includes('認可之資通安全專業證照') ||
-            // Promotional & accreditation badges with small font (lineMaxH <= 10)
-            (lineMaxH <= 10 && (
+            // Promotional & accreditation badges with small font (contentMaxH <= 10)
+            (contentMaxH <= 10 && (
                 lineText.includes('認證') || 
                 lineText.includes('證照') ||
                 lineText.includes('學分') ||
@@ -441,12 +442,12 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         }
 
         const standaloneCodeMatch = lineText.match(/^[A-Za-z0-9_-]{2,10}$/);
-        if (lineMaxH <= 13 && standaloneCodeMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course', 'EPI', 'PMI', 'CompTIA', 'AI'].includes(standaloneCodeMatch[0])) {
-            codeBadges.push({ badge: { str: standaloneCodeMatch[0] }, y: line[0].y, lineMaxH, line });
+        if (contentMaxH <= 13 && standaloneCodeMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course', 'EPI', 'PMI', 'CompTIA', 'AI'].includes(standaloneCodeMatch[0])) {
+            codeBadges.push({ badge: { str: standaloneCodeMatch[0] }, y: line[0].y, lineMaxH: contentMaxH, line });
             continue;
         }
 
-        candidateLines.push({ line, contentItems, lineText, lineMaxH, y: line[0].y });
+        candidateLines.push({ line, contentItems, lineText, lineMaxH: contentMaxH, y: line[0].y });
     }
 
     // Identify Chinese title lines by font hierarchy (title has largest font in banner)
@@ -462,6 +463,12 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         for (const l of candidateLines) {
             // Line has matching dominant large title font (including English continuation words like TensorFlow)
             if (maxZhH >= 12 && l.lineMaxH >= maxZhH - 2.5) {
+                // GUARD: If this line has NO Chinese characters and contains English words,
+                // and zhCandidates already identified Chinese title lines, do NOT treat this line as Chinese title!
+                // It is an English subtitle and must be collected in enLines instead.
+                if (!/[\u4e00-\u9fa5]/.test(l.lineText) && /[A-Za-z]{2,}/.test(l.lineText)) {
+                    continue;
+                }
                 zhLines.push(l.lineText);
                 if (l.y > maxZhY) maxZhY = l.y;
                 if (l.y < minZhY) minZhY = l.y;
@@ -714,17 +721,38 @@ async function parseDocx(buffer) {
                                 continue; // Skip struck-through text!
                             }
                         }
-                        const tList = run.getElementsByTagName('w:t');
-                        for (let ti = 0; ti < tList.length; ti++) {
-                            pText += tList[ti].textContent;
+                        const children = run.children || run.childNodes;
+                        if (children && children.length > 0) {
+                            for (let ci = 0; ci < children.length; ci++) {
+                                const ch = children[ci];
+                                const tag = ch.tagName || ch.nodeName;
+                                if (tag === 'w:t') {
+                                    pText += ch.textContent;
+                                } else if (tag === 'w:br' || tag === 'w:cr') {
+                                    pText += '\n';
+                                } else if (tag === 'w:tab') {
+                                    pText += ' ';
+                                }
+                            }
+                        } else {
+                            const brCount = run.getElementsByTagName('w:br').length + run.getElementsByTagName('w:cr').length;
+                            if (brCount > 0) pText += '\n'.repeat(brCount);
+                            const tList = run.getElementsByTagName('w:t');
+                            for (let ti = 0; ti < tList.length; ti++) {
+                                pText += tList[ti].textContent;
+                            }
                         }
                     }
                     pText = pText.trim();
                     if (pText.length > 0) {
-                        if (prefix && !BULLET_ITEM_PATTERN.test(pText)) {
-                            pText = prefix + pText;
+                        const subLines = pText.split(/\r?\n+/).map(s => s.trim()).filter(Boolean);
+                        for (let sIdx = 0; sIdx < subLines.length; sIdx++) {
+                            let line = subLines[sIdx];
+                            if (sIdx === 0 && prefix && !BULLET_ITEM_PATTERN.test(line)) {
+                                line = prefix + line;
+                            }
+                            paragraphs.push(line);
                         }
-                        paragraphs.push(pText);
                     }
                 }
 
@@ -1165,7 +1193,7 @@ function toCleanItemArray(val) {
 function cleanItemText(str) {
     if (!str) return '';
     return str
-        .replace(/^[\s\uf06c\uf06e\uf075•●\-\*※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼\d.、()（）]+/, '')
+        .replace(/^[\s\uf06c\uf06e\uf075•●\-\*※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼\d.、()（）]+/, '')
         .replace(/^(?:Domain\s*\d+|[A-Za-z]\d+(?:\.\d+)*|[A-Za-z])[.、)）\s]+/i, '')
         .trim();
 }
@@ -1176,7 +1204,7 @@ function cleanItemText(str) {
  */
 function splitInlineBullets(text) {
     if (!text) return [];
-    const parts = text.split(/(?<=[^\s])\s+(?=(?:\d+[.、](?!\d)|[\uf06c\uf06e\uf075•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼])\s*)/);
+    const parts = text.split(/(?<=[^\s])\s+(?=(?:\d+[.、](?!\d)|[\uf06c\uf06e\uf075•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼])\s*)|(?<=[^\s])(?=[\uf06c\uf06e\uf075•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]\s*)/);
     return parts.map(p => p.trim()).filter(Boolean);
 }
 
@@ -1186,7 +1214,7 @@ function splitInlineBullets(text) {
  */
 function splitOutlineItems(text) {
     if (!text) return [];
-    const parts = text.split(/(?=(?<=^|[\s\r\n])(?<!Top\s*|top\s*|OS\s*|os\s*|v\s*|V\s*|ver\s*|version\s*)\d{1,2}[.、](?=(?:\s+|[\u4e00-\u9fa5➔→•(（【\["'「『]))|(?<=^|[\s\r\n])\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[\uf06c\uf06e\uf075•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
+    const parts = text.split(/(?=(?<=^|[\s\r\n])(?<!Top\s*|top\s*|OS\s*|os\s*|v\s*|V\s*|ver\s*|version\s*)\d{1,2}[.、](?=(?:\s+|[\u4e00-\u9fa5➔→•(（【\["'「『]))|(?<=^|[\s\r\n])\d{1,2}-\d{1,3}(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[\uf06c\uf06e\uf075•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
     const res = [];
     let cur = '';
     for (const p of parts) {
@@ -1757,6 +1785,12 @@ function splitRecommendedCourses(text, catalogTitles = []) {
         return trimmed.split(SPLIT_REC_REGEX).flatMap(s => splitRecommendedCourses(s, catalogTitles)).map(s => s.trim()).filter(Boolean);
     }
 
+    // 3b. Numbered bullets: e.g. "1. xxx 2. yyy" or "(1) xxx (2) yyy"
+    const NUM_BULLET_SPLIT = /(?<=[^\s])\s+(?=(?:\d{1,2}[.、](?!\d)|\([0-9]+\)|[①-⑳❶-❿㈠-㈩])\s*)/;
+    if (NUM_BULLET_SPLIT.test(trimmed)) {
+        return trimmed.split(NUM_BULLET_SPLIT).flatMap(s => splitRecommendedCourses(s, catalogTitles)).map(s => s.trim()).filter(Boolean);
+    }
+
     // 4. If catalogTitles provided, split by matching titles
     if (catalogTitles && catalogTitles.length > 0) {
         const validTitles = catalogTitles.filter(t => t && t.length >= 4 && !/^[A-Za-z0-9/_-]+$/.test(t));
@@ -1766,8 +1800,16 @@ function splitRecommendedCourses(text, catalogTitles = []) {
         let remaining = trimmed;
 
         while (remaining.length > 0) {
-            const codePrefixMatch = remaining.match(/^((?:\d+[.、]|\([0-9]+\))?\s*[A-Za-z0-9/_-]{2,12}\s*[：:\s]\s*)(.*)$/);
-            let checkText = remaining;
+            const bulletPrefixMatch = remaining.match(/^((?:\d+[.、]|\([0-9]+\)|[①-⑳❶-❿㈠-㈩])\s*)/);
+            let bulletPrefix = '';
+            let remainingNoBullet = remaining;
+            if (bulletPrefixMatch) {
+                bulletPrefix = bulletPrefixMatch[1];
+                remainingNoBullet = remaining.slice(bulletPrefix.length).trim();
+            }
+
+            const codePrefixMatch = remainingNoBullet.match(/^([A-Za-z0-9/_-]{2,12}\s*[：:\s]\s*)(.*)$/);
+            let checkText = remainingNoBullet;
             let codePrefix = '';
             if (codePrefixMatch) {
                 codePrefix = codePrefixMatch[1];
@@ -1782,8 +1824,14 @@ function splitRecommendedCourses(text, catalogTitles = []) {
 
             const matchedPrefix = sorted.find(t => normCheck.startsWith(normalizeText(t)));
             if (matchedPrefix) {
-                const len = findRawSliceLength(checkText, normalizeText(matchedPrefix));
-                result.push((codePrefix + checkText.slice(0, len)).trim());
+                let len = findRawSliceLength(checkText, normalizeText(matchedPrefix));
+                // If trailing immediately after matched course is common suffix "課程" or "班", absorb it
+                const afterMatch = checkText.slice(len);
+                const suffixMatch = afterMatch.match(/^(\s*(?:課程|全修班|班))/);
+                if (suffixMatch) {
+                    len += suffixMatch[1].length;
+                }
+                result.push((bulletPrefix + codePrefix + checkText.slice(0, len)).trim());
                 remaining = checkText.slice(len).trim();
                 continue;
             }
@@ -1804,9 +1852,12 @@ function splitRecommendedCourses(text, catalogTitles = []) {
                 if (bestIdx > 0 && bestTitle) {
                     const splitIdx = findRawPrefixIndex(remaining, bestIdx);
                     const prefixPart = remaining.slice(0, splitIdx).trim();
-                    if (prefixPart) result.push(prefixPart);
-                    remaining = remaining.slice(splitIdx).trim();
-                    continue;
+                    // Never slice off a lone bullet number or symbol (like "1", "1.", "(1)") as a standalone item
+                    if (prefixPart && !/^(?:\d+[.、]|\([0-9]+\)|[①-⑳❶-❿㈠-㈩])$/.test(prefixPart)) {
+                        result.push(prefixPart);
+                        remaining = remaining.slice(splitIdx).trim();
+                        continue;
+                    }
                 }
             }
 
@@ -1828,8 +1879,8 @@ function analyzeItemHierarchy(itemText, prevH, fieldLabel) {
     if (!itemText) return { level: 1, type: 'text', badgeText: '•', indent: '', text: '' };
     const raw = itemText.trim();
 
-    // 1. Explicit bullet dot (●, •, ※, ·, -, *)
-    const bMatch = raw.match(/^([●•※\-\*·])\s*(.*)$/);
+    // 1. Explicit bullet dot (●, •, ※, ·, ‧, ・, -, *)
+    const bMatch = raw.match(/^([●•※\-\*·‧・▪])\s*(.*)$/);
     if (bMatch) {
         return {
             level: 2,
@@ -2424,7 +2475,7 @@ function createMissingListField(label, rawVal, isWord) {
             const h = analyzeItemHierarchy(item, prevH, label);
             if (h.type === 'number') {
                 mainNum = parseInt(h.badgeText, 10);
-            } else if (h.type === 'text' && !/^[●•※\-\*·]/.test(item)) {
+            } else if (h.type === 'text' && !/^[●•※\-\*·‧・▪]/.test(item)) {
                 mainNum++;
                 if (!h.badgeText || h.badgeText === '•') h.badgeText = String(mainNum);
             }
@@ -2768,8 +2819,8 @@ function compareSinglePair(w, p) {
         ? [...p['後續推薦課程']]
         : splitRecommendedCourses(p['後續推薦課程'] || '');
 
-    const cleanRec = s => s.replace(/^[A-Za-z0-9/_-]{2,12}\s*[：:]\s*/, '').replace(/^[A-Z0-9_-]*\d[A-Z0-9_-]*\s+(?=[\u4e00-\u9fa5])/, '').trim();
-
+    const cleanRec = s => s.replace(/^[A-Za-z0-9/_-]{2,12}\s*[：:]\s*/, '').replace(/^[A-Z0-9_-]*\d[A-Z0-9_-]*\s*(?=[\u4e00-\u9fa5])/, '').trim();
+ 
     // Re-split using partner's recommendations if concatenated in Word
     if (wRecList.length > 0 && pRecList.length > 0) {
         const pFirstClean = cleanRec(cleanItemText(pRecList[0]));
@@ -2829,7 +2880,7 @@ function compareSinglePair(w, p) {
         };
         hasYellow = true;
     } else {
-        const isMatch = (wFirstNorm === pFirstNorm) || (wAllNorm === pFirstNorm);
+        const isMatch = (wFirstNorm === pFirstNorm) || (wAllNorm === pFirstNorm) || (pFirstNorm && wFirstNorm.endsWith(pFirstNorm)) || (wFirstNorm && pFirstNorm.endsWith(wFirstNorm));
         const simFirst = calculateSimilarity(wFirstNorm, pFirstNorm);
         const simAll = calculateSimilarity(wAllNorm, pFirstNorm);
         const maxSim = Math.max(simFirst, simAll);
@@ -3317,8 +3368,8 @@ function createCourseCard(item, idx) {
                 }
 
                 // Strip leading duplicate bullets if bullet badge is already shown
-                const displayWord = (d.word && h.type === 'bullet') ? d.word.replace(/^[●•※\-\*·]\s*/, '') : d.word;
-                const displayPdf = (d.pdf && h.type === 'bullet') ? d.pdf.replace(/^[●•※\-\*·]\s*/, '') : d.pdf;
+                const displayWord = (d.word && h.type === 'bullet') ? d.word.replace(/^[●•※\-\*·‧・▪]\s*/, '') : d.word;
+                const displayPdf = (d.pdf && h.type === 'bullet') ? d.pdf.replace(/^[●•※\-\*·‧・▪]\s*/, '') : d.pdf;
 
                 // Hierarchy row indentation and header styling
                 const rowIndentClass = h.level >= 2 ? 'md:ml-6 ml-3 pl-2.5 border-l-2 border-indigo-200/70' : '';
