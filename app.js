@@ -19,6 +19,7 @@ const KNOWN_LABELS = [
     '課程介紹',
     '學會技能',
     '備註事項',
+    '備註項目',
     '後續推薦課程'
 ];
 
@@ -605,6 +606,30 @@ function buildNumberingMap(numberingDoc) {
 }
 
 /**
+ * Normalizes section headers found in Word tables to standard canonical labels.
+ * Handles common layout variations like '備註項目', '特殊備註', '推薦課程', '課程概要', etc.
+ */
+function matchWordSectionLabel(firstCellText, rowFullText) {
+    const cleanCell = (firstCellText || '').replace(/[\s\u3000:：()（）]/g, '').trim();
+    if (cleanCell) {
+        if (cleanCell.startsWith('備註事項') || cleanCell.startsWith('備註項目') || cleanCell === '注意事項' || cleanCell === '特殊備註') return '備註事項';
+        if (cleanCell === '推薦課程' || cleanCell.startsWith('後續推薦') || cleanCell === '推薦後續課程') return '後續推薦課程';
+        if (cleanCell.startsWith('課程內容') || cleanCell.startsWith('課程大綱')) return '課程內容';
+        if (cleanCell.startsWith('課程目標') || cleanCell.startsWith('課程介紹') || cleanCell.startsWith('課程概要')) return '課程目標';
+        if (cleanCell.startsWith('適合對象')) return '適合對象';
+        if (cleanCell.startsWith('先修課程')) return '先修課程';
+        if (cleanCell.startsWith('預備知識')) return '預備知識';
+        if (cleanCell.startsWith('學會技能')) return '學會技能';
+    }
+    if (rowFullText) {
+        const cleanRow = (rowFullText || '').replace(/[\s\u3000:：]/g, '').trim();
+        if (cleanRow.startsWith('備註事項') || cleanRow.startsWith('備註項目')) return '備註事項';
+        return KNOWN_LABELS.find(l => rowFullText.startsWith(l)) || null;
+    }
+    return null;
+}
+
+/**
  * Parses Word (.docx) file extracting clean table data without deleted (strikethrough) items.
  * Strictly resolves Word native bullet and numbering lists (<w:numPr>) using word/numbering.xml.
  */
@@ -807,7 +832,7 @@ async function parseDocx(buffer) {
             const firstCellText = row[0] ? row[0].fullText.trim() : '';
 
             // Metadata row: only parse if not a known label row (防止備註事項等區塊誤認)
-            const isLabelRow = KNOWN_LABELS.some(l => firstCellText === l || firstCellText.startsWith(l));
+            const isLabelRow = Boolean(matchWordSectionLabel(firstCellText, rowFullText));
             if (!isLabelRow && (rowFullText.includes('時數') || rowFullText.includes('費用') || rowFullText.includes('點數'))) {
                 const hoursMatch = rowFullText.match(/時數[：:\s]*([0-9.]+)\s*小時?/);
                 if (hoursMatch && !course['時數']) course['時數'] = hoursMatch[1];
@@ -831,10 +856,7 @@ async function parseDocx(buffer) {
             }
 
             // Check known section labels or continuation rows
-            let matchedLabel = KNOWN_LABELS.find(l => firstCellText === l || firstCellText.startsWith(l));
-            if (!matchedLabel && rowFullText) {
-                matchedLabel = KNOWN_LABELS.find(l => rowFullText.startsWith(l));
-            }
+            let matchedLabel = matchWordSectionLabel(firstCellText, rowFullText);
 
             // Continuation row: firstCell is empty (e.g. vertically merged cell <w:vMerge> or unlabelled follow-up row like CSSLP 課程內容)
             if (!matchedLabel && !firstCellText && lastSectionLabel) {
@@ -1119,7 +1141,7 @@ async function parsePdf(buffer) {
 
                 if (sec.label === '課程內容' || sec.label === '課程大綱') {
                     course['課程內容'] = extractListFromPdfSection(secItems, false);
-                } else if (sec.label === '備註事項') {
+                } else if (sec.label === '備註事項' || sec.label === '備註項目') {
                     course['備註事項'] = extractNotesFromPdfSection(secItems);
                 } else if (sec.label === '後續推薦課程') {
                     const fullText = secItems.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
