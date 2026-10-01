@@ -640,25 +640,47 @@ async function parseDocx(buffer) {
                         const ilvlNode = numPr.getElementsByTagName('w:ilvl')[0];
                         const ilvl = ilvlNode ? (getXmlAttr(ilvlNode, 'w:val') || getXmlAttr(ilvlNode, 'val') || '0') : '0';
                         if (numId) {
-                            const key = `${numId}_${ilvl}`;
-                            const lvlInfo = numMap[numId] ? numMap[numId][ilvl] : null;
-                            if (counters[key] === undefined) {
-                                counters[key] = lvlInfo ? lvlInfo.start : 1;
-                            } else {
-                                counters[key]++;
+                            const lvl = parseInt(ilvl, 10);
+                            if (!counters[numId]) counters[numId] = {};
+                            // Ensure parent levels are initialized to their start values if not yet set
+                            for (let pLvl = 0; pLvl < lvl; pLvl++) {
+                                if (counters[numId][pLvl] === undefined) {
+                                    const pStart = numMap[numId] && numMap[numId][pLvl] ? numMap[numId][pLvl].start : 1;
+                                    counters[numId][pLvl] = pStart;
+                                }
                             }
-                            const n = counters[key];
+                            const lvlInfo = numMap[numId] ? numMap[numId][lvl] : null;
+                            const start = lvlInfo ? lvlInfo.start : 1;
+                            if (counters[numId][lvl] === undefined) {
+                                counters[numId][lvl] = start;
+                            } else {
+                                counters[numId][lvl]++;
+                            }
+                            // Reset any deeper levels
+                            for (const k of Object.keys(counters[numId])) {
+                                if (parseInt(k, 10) > lvl) {
+                                    delete counters[numId][k];
+                                }
+                            }
+                            const n = counters[numId][lvl];
                             if (lvlInfo) {
-                                if (lvlInfo.numFmt === 'decimal') {
-                                    const t = lvlInfo.lvlText || `%${parseInt(ilvl, 10) + 1}.`;
-                                    prefix = t.replace(new RegExp(`%${parseInt(ilvl, 10) + 1}`), n) + ' ';
-                                } else if (lvlInfo.numFmt === 'bullet') {
+                                if (lvlInfo.numFmt === 'bullet') {
                                     prefix = (lvlInfo.lvlText || '•') + ' ';
                                 } else if (lvlInfo.numFmt === 'ideographTraditional') {
                                     const zhNums = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
                                     prefix = (zhNums[n] || n) + '、 ';
                                 } else {
-                                    prefix = n + '. ';
+                                    let t = lvlInfo.lvlText || `%${lvl + 1}.`;
+                                    t = t.replace(/%([1-9])/g, (_, p1) => {
+                                        const targetLvl = parseInt(p1, 10) - 1;
+                                        if (targetLvl === lvl) return n;
+                                        if (counters[numId][targetLvl] !== undefined) return counters[numId][targetLvl];
+                                        const tStart = numMap[numId] && numMap[numId][targetLvl] ? numMap[numId][targetLvl].start : 1;
+                                        return tStart;
+                                    });
+                                    if (!/[.、\s]$/.test(t)) t += ' ';
+                                    else if (!t.endsWith(' ')) t += ' ';
+                                    prefix = t;
                                 }
                             } else {
                                 prefix = n + '. ';
@@ -1246,7 +1268,7 @@ function extractListItems(paragraphs, fullText) {
         const prevItem = items.length > 0 ? items[items.length - 1] : '';
         const prevIsBullet = prevItem && BULLET_ITEM_PATTERN.test(prevItem);
         const prevIsModuleHeader = prevItem && MODULE_HEADER_PATTERN.test(prevItem);
-        const isTopicWithColon = /^[^：:\n]{2,18}[：:]/.test(item);
+        const isTopicWithColon = /^[^，,、；;：:\n]{2,18}[：:]/.test(item);
 
         if (isBullet) {
             items.push(item);
