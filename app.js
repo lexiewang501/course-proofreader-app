@@ -2525,7 +2525,7 @@ function compareCourseData(wordCourses, pdfCourses) {
         }
     }
 
-    // 3. Unmatched PDF courses (Word 原稿無此課程 - PDF 多出)
+    // 3. Unmatched PDF courses (Word 原稿無此課程 - PDF 多出 / 重複排版)
     for (let pIdx = 0; pIdx < pdfCourses.length; pIdx++) {
         if (!matchedPdfIndices.has(pIdx)) {
             const p = pdfCourses[pIdx];
@@ -2533,10 +2533,33 @@ function compareCourseData(wordCourses, pdfCourses) {
             const pNameEn = p.course_name_en || p['英文名稱'] || '';
             const pCodeVal = p.course_code || p['課程代碼'] || '未標註';
 
+            // Check if this course code or name was ALREADY matched by another PDF entry
+            const alreadyMatchedPair = pairs.find(pair => {
+                const wCode = (pair.wCourse.course_code || pair.wCourse['課程代碼'] || '').trim();
+                const pCode = (pair.pCourse.course_code || pair.pCourse['課程代碼'] || '').trim();
+                if (isValidCourseCode(pCodeVal)) {
+                    if (isValidCourseCode(wCode) && cleanCourseCodeStr(pCodeVal) === cleanCourseCodeStr(wCode)) return true;
+                    if (isValidCourseCode(pCode) && cleanCourseCodeStr(pCodeVal) === cleanCourseCodeStr(pCode)) return true;
+                }
+                const pZhNorm = normalizeText(pNameZh);
+                const wZhNorm = normalizeText(pair.wCourse.course_name_zh || pair.wCourse['課程名稱'] || '');
+                return pZhNorm && wZhNorm && pZhNorm === wZhNorm;
+            });
+
+            const isDuplicate = !!alreadyMatchedPair;
+            const earlierPage = (alreadyMatchedPair && alreadyMatchedPair.pCourse && alreadyMatchedPair.pCourse.page)
+                ? ` (前次出現於 PDF 第 ${alreadyMatchedPair.pCourse.page} 頁)`
+                : '';
+
+            const missingType = isDuplicate ? 'duplicate_in_pdf' : 'missing_in_word';
+            const statusText = isDuplicate
+                ? `【PDF 重複排版】此課在 PDF 中重複出現${earlierPage}，Word 原稿僅有 1 門！`
+                : '【Word 原稿無此課】PDF 排版有，但 Word 原稿找不到此課！';
+
             results.push({
                 status: 'gray',
-                missingType: 'missing_in_word',
-                statusText: '【Word 原稿無此課】PDF 排版有，但 Word 原稿找不到此課！',
+                missingType,
+                statusText,
                 code: pCodeVal,
                 name: pNameZh || pNameEn,
                 nameZh: pNameZh,
@@ -3343,8 +3366,11 @@ function renderCourseCards() {
 
     // If there are missing courses, show a high-visibility summary banner at top
     const missingPdf = state.comparisons.filter(c => c.status === 'gray' && c.missingType === 'missing_in_pdf');
+    const duplicatePdf = state.comparisons.filter(c => c.status === 'gray' && c.missingType === 'duplicate_in_pdf');
     const missingWord = state.comparisons.filter(c => c.status === 'gray' && c.missingType === 'missing_in_word');
-    if ((missingPdf.length > 0 || missingWord.length > 0) && (!query && (filter === 'all' || filter === 'gray'))) {
+    const totalUnpaired = missingPdf.length + duplicatePdf.length + missingWord.length;
+
+    if (totalUnpaired > 0 && (!query && (filter === 'all' || filter === 'gray'))) {
         const banner = document.createElement('div');
         banner.className = 'p-4 rounded-xl border border-amber-300 bg-amber-50 shadow-xs space-y-2.5 mb-6';
         banner.innerHTML = `
@@ -3355,11 +3381,19 @@ function renderCourseCards() {
                 <div class="flex-1 space-y-2">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <div class="font-bold text-amber-950 text-sm flex items-center gap-2">
-                            <span>⚠️ 雙方課程名單核對警示：發現 ${missingPdf.length + missingWord.length} 門課程在某一邊完全找不到！</span>
+                            <span>⚠️ 雙方課程名單核對警示：發現 ${totalUnpaired} 門課程在名單上未對齊！</span>
                         </div>
                         <span class="text-3xs font-mono font-bold px-2 py-0.5 rounded bg-amber-200 text-amber-900">單邊缺漏隔離中</span>
                     </div>
                     <div class="text-xs text-amber-900 space-y-1.5 leading-relaxed">
+                        ${duplicatePdf.length > 0 ? `
+                            <div class="flex items-start gap-1.5">
+                                <span class="font-bold text-rose-700 whitespace-nowrap">● 🚨 【PDF 重複排版】(${duplicatePdf.length} 門)：</span>
+                                <div class="text-slate-800 font-medium">
+                                    同一門課在 PDF 中出現多次：${duplicatePdf.map(m => `<span class="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-rose-100 text-rose-900 font-mono font-bold text-3xs border border-rose-300">${m.code} ${m.name}</span>`).join('、')}
+                                </div>
+                            </div>
+                        ` : ''}
                         ${missingPdf.length > 0 ? `
                             <div class="flex items-start gap-1.5">
                                 <span class="font-bold text-red-700 whitespace-nowrap">● 【PDF 漏排此課程】(${missingPdf.length} 門)：</span>
@@ -3397,7 +3431,12 @@ function createCourseCard(item, idx) {
     card.className = `course-card bg-white rounded-2xl border shadow-xs transition overflow-hidden ${
         item.status === 'red' ? 'border-red-300 ring-1 ring-red-400/20' :
         item.status === 'yellow' ? 'border-amber-300' :
-        item.status === 'gray' ? (item.missingType === 'missing_in_pdf' ? 'border-amber-300 ring-1 ring-amber-400/30' : (item.missingType === 'missing_in_word' ? 'border-indigo-300 ring-1 ring-indigo-400/20' : 'border-slate-300 bg-slate-50/50')) : 'border-slate-200'
+        item.status === 'gray' ? (
+            item.missingType === 'duplicate_in_pdf' ? 'border-rose-300 ring-1 ring-rose-400/30' :
+            item.missingType === 'missing_in_pdf' ? 'border-amber-300 ring-1 ring-amber-400/30' :
+            item.missingType === 'missing_in_word' ? 'border-indigo-300 ring-1 ring-indigo-400/20' :
+            'border-slate-300 bg-slate-50/50'
+        ) : 'border-slate-200'
     }`;
 
     // Header Badge info
@@ -3732,7 +3771,17 @@ function createCourseCard(item, idx) {
 
     let missingBannerHtml = '';
     if (item.status === 'gray') {
-        if (item.missingType === 'missing_in_pdf') {
+        if (item.missingType === 'duplicate_in_pdf') {
+            missingBannerHtml = `
+                <div class="px-5 py-3 bg-rose-100/90 border-b border-rose-200 flex items-center justify-between gap-3 text-xs font-bold text-rose-950">
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4 text-rose-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path></svg>
+                        <span>🚨 【PDF 重複排版警告】此課程在 PDF 中已排版過，但在此頁又重複排了一次！Word 原稿僅有 1 門課程，請美編確認是否為版面殘留或贅課。</span>
+                    </div>
+                    <span class="text-3xs font-mono font-bold px-2 py-0.5 rounded bg-rose-200 text-rose-900 flex-shrink-0">PDF 重複排版</span>
+                </div>
+            `;
+        } else if (item.missingType === 'missing_in_pdf') {
             missingBannerHtml = `
                 <div class="px-5 py-3 bg-amber-100/90 border-b border-amber-200 flex items-center justify-between gap-3 text-xs font-bold text-amber-950">
                     <div class="flex items-center gap-2">
@@ -3888,10 +3937,18 @@ function copyErrorReport() {
     }
 
     if (grayItems.length > 0) {
+        const duplicatePdf = grayItems.filter(item => item.missingType === 'duplicate_in_pdf');
         const missingPdf = grayItems.filter(item => item.missingType === 'missing_in_pdf');
         const missingWord = grayItems.filter(item => item.missingType === 'missing_in_word');
 
-        report += `⚪ 【雙方課程清單缺漏警示 (共 ${grayItems.length} 門未對齊)】：\n`;
+        report += `⚪ 【雙方課程清單未對齊警示 (共 ${grayItems.length} 門)】：\n`;
+        if (duplicatePdf.length > 0) {
+            report += `  🚨 【美編 PDF 重複排版 (${duplicatePdf.length} 門)】（同一門課排了多次，請刪除重複版面）：\n`;
+            duplicatePdf.forEach((item, i) => {
+                const pageStr = item.pdfCourse && item.pdfCourse.page ? ` (頁數：P.${item.pdfCourse.page})` : '';
+                report += `     ${i + 1}. 【${item.code}】${item.name}${pageStr} ➔ PDF 重複排版！\n`;
+            });
+        }
         if (missingPdf.length > 0) {
             report += `  ⚠️ 【Word 原稿有，但美編 PDF 漏排此課程 (${missingPdf.length} 門)】（待補排）：\n`;
             missingPdf.forEach((item, i) => {
@@ -3974,7 +4031,9 @@ function exportCSVReport() {
         }
 
         if (c.status === 'gray') {
-            if (c.missingType === 'missing_in_pdf') {
+            if (c.missingType === 'duplicate_in_pdf') {
+                errDescs.push('【排版警告】此課程在 PDF 中重複排版多次');
+            } else if (c.missingType === 'missing_in_pdf') {
                 errDescs.push('【嚴重缺漏】Word 原稿有此課，但 PDF 排版完全漏排此課程');
             } else if (c.missingType === 'missing_in_word') {
                 errDescs.push('【提醒】PDF 排版有此課，但 Word 原稿中未列出此課');
@@ -3995,7 +4054,7 @@ function exportCSVReport() {
             c.status === 'green' ? '相符' :
             c.status === 'red' ? '錯誤' :
             c.status === 'yellow' ? '提醒' :
-            (c.missingType === 'missing_in_pdf' ? 'PDF漏排' : (c.missingType === 'missing_in_word' ? 'Word無此課' : '缺漏')),
+            (c.missingType === 'duplicate_in_pdf' ? 'PDF重複排版' : (c.missingType === 'missing_in_pdf' ? 'PDF漏排' : (c.missingType === 'missing_in_word' ? 'Word無此課' : '缺漏'))),
             c.layoutModeText || '',
             fields['時數'] ? fields['時數'].word : '',
             fields['時數'] ? fields['時數'].pdf : '',
