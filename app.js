@@ -630,6 +630,25 @@ function matchWordSectionLabel(firstCellText, rowFullText) {
 }
 
 /**
+ * Checks whether an OpenXML run property element (<w:rPr>) indicates strikethrough.
+ * Handles both <w:strike> and <w:dstrike>, respecting explicit val="0" / val="false" / val="off".
+ */
+function isRunStrikethrough(rPr) {
+    if (!rPr) return false;
+    const strike = rPr.getElementsByTagName('w:strike')[0];
+    if (strike) {
+        const val = getXmlAttr(strike, 'w:val') || getXmlAttr(strike, 'val');
+        if (val !== '0' && val !== 'false' && val !== 'off') return true;
+    }
+    const dstrike = rPr.getElementsByTagName('w:dstrike')[0];
+    if (dstrike) {
+        const val = getXmlAttr(dstrike, 'w:val') || getXmlAttr(dstrike, 'val');
+        if (val !== '0' && val !== 'false' && val !== 'off') return true;
+    }
+    return false;
+}
+
+/**
  * Parses Word (.docx) file extracting clean table data without deleted (strikethrough) items.
  * Strictly resolves Word native bullet and numbering lists (<w:numPr>) using word/numbering.xml.
  */
@@ -658,6 +677,33 @@ async function parseDocx(buffer) {
 
     for (let t = 0; t < tables.length; t++) {
         const tbl = tables[t];
+
+        // 1. Check strikethrough ratio of the entire course table
+        // When PM cancels/deletes a course, >= 90% (typically 100%) of table text is struck through.
+        // Such courses MUST NOT be treated as active Word courses; PDF omitting them is 100% correct.
+        // If a course only has minor strikethroughs (< 90%), it is an active course undergoing editing,
+        // and must be retained with struck text excluded.
+        const allRuns = tbl.getElementsByTagName('w:r');
+        let tableTotalChars = 0;
+        let tableStruckChars = 0;
+        for (let ri = 0; ri < allRuns.length; ri++) {
+            const rNode = allRuns[ri];
+            const rPr = rNode.getElementsByTagName('w:rPr')[0];
+            const isStruck = isRunStrikethrough(rPr);
+            const tNodes = rNode.getElementsByTagName('w:t');
+            for (let ti = 0; ti < tNodes.length; ti++) {
+                const textLen = (tNodes[ti].textContent || '').trim().length;
+                tableTotalChars += textLen;
+                if (isStruck) {
+                    tableStruckChars += textLen;
+                }
+            }
+        }
+
+        if (tableTotalChars > 0 && (tableStruckChars / tableTotalChars) >= 0.90) {
+            continue; // Completely cancelled/deleted course (>= 90% strikethrough)
+        }
+
         const trList = tbl.getElementsByTagName('w:tr');
         const rows = [];
 
@@ -740,11 +786,8 @@ async function parseDocx(buffer) {
                     for (let ri = 0; ri < rList.length; ri++) {
                         const run = rList[ri];
                         const rPr = run.getElementsByTagName('w:rPr')[0];
-                        if (rPr) {
-                            if (rPr.getElementsByTagName('w:strike').length > 0 ||
-                                rPr.getElementsByTagName('w:dstrike').length > 0) {
-                                continue; // Skip struck-through text!
-                            }
+                        if (isRunStrikethrough(rPr)) {
+                            continue; // Skip struck-through text!
                         }
                         const children = run.children || run.childNodes;
                         if (children && children.length > 0) {
