@@ -1006,13 +1006,36 @@ async function parsePdf(buffer) {
     for (let p = 1; p <= doc.numPages; p++) {
         const page = await doc.getPage(p);
         const textContent = await page.getTextContent();
-        const items = textContent.items.map(it => ({
+        let items = textContent.items.map(it => ({
             x: Math.round(it.transform[4]),
             y: Math.round(it.transform[5]),
             w: Math.round(it.width * 10) / 10,
             h: Math.round((it.height || 0) * 10) / 10,
             str: it.str.trim()
         })).filter(it => it.str.length > 0 && it.x >= 35 && it.x < 565);
+
+        // Merge superscript symbols (® / ™ / ©) into the immediately preceding host word across the page
+        const supers = items.filter(it => /^[®™©]$/.test(it.str));
+        if (supers.length > 0) {
+            for (const sup of supers) {
+                const candidates = items.filter(it => 
+                    it !== sup && 
+                    !/^[®™©]$/.test(it.str) && 
+                    !/^[：:\s]+$/.test(it.str) &&
+                    (sup.x - (it.x + (it.w || 0))) >= -3 && 
+                    (sup.x - (it.x + (it.w || 0))) <= 8 && 
+                    Math.abs(sup.y - it.y) <= 8
+                );
+                if (candidates.length > 0) {
+                    candidates.sort((a, b) => Math.abs(sup.x - (a.x + a.w)) - Math.abs(sup.x - (b.x + b.w)));
+                    const host = candidates[0];
+                    host.str = host.str + sup.str;
+                    host.w = Math.max(host.w, (sup.x + sup.w) - host.x);
+                    sup.merged = true;
+                }
+            }
+            items = items.filter(it => !it.merged);
+        }
 
         // 1. Extract vector rectangles to determine exact table cell bounds
         const opList = await page.getOperatorList();
