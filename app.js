@@ -1391,8 +1391,15 @@ function extractListItems(paragraphs, fullText, isNotes = false) {
                 // Standalone sub-topic with title colon (e.g. 存取控制與雲端模型：...), never merge into prev
                 items.push(item);
             }
-        } else if (prevIsBullet && !prevItem.endsWith('：') && !prevItem.endsWith(':')) {
-            // Unnumbered paragraph following a bullet item: append as body text
+        } else if (isNotes && prevIsBullet && !prevItem.endsWith('：') && !prevItem.endsWith(':')) {
+            // In notes (備註事項), unnumbered continuation paragraphs belong to preceding note body
+            items[items.length - 1] += ' ' + item;
+        } else if (prevIsBullet && (
+            /[，,、(（與和或的之及]$/.test(prevItem) || 
+            /^[a-z，,、；;與和或的之及]/.test(item) ||
+            ((prevItem.match(/[(（]/g) || []).length > (prevItem.match(/[)）]/g) || []).length)
+        )) {
+            // Continuation line of an incomplete bullet statement
             items[items.length - 1] += ' ' + item;
         } else {
             items.push(item);
@@ -1502,8 +1509,54 @@ function extractNotesFromPdfSection(secItems) {
  */
 function getColumnSplits(secItems) {
     if (!secItems || secItems.length === 0) return [];
-    
-    // 1. Identify true bullet / item markers at the start of a column/line
+
+    // 1. Direct whitespace gutter search between 200 and 380.
+    // In dual-column layouts on flyers, the left and right columns are separated by an empty vertical gutter.
+    // If a clear gutter of width >= 16 exists, its center is the true column split boundary.
+    const intervals = secItems.map(it => {
+        const charWidth = /[\u4e00-\u9fa5]/.test(it.str) ? 10 : 6;
+        const w = it.w || Math.max(it.str.length * charWidth, 10);
+        return { start: it.x, end: it.x + w };
+    });
+
+    let bestGutterStart = -1, bestGutterWidth = 0;
+    let inGutter = false, currentStart = 0;
+    for (let testX = 200; testX <= 380; testX += 2) {
+        const hasText = intervals.some(inv => testX >= inv.start && testX <= inv.end);
+        if (!hasText) {
+            if (!inGutter) {
+                inGutter = true;
+                currentStart = testX;
+            }
+        } else {
+            if (inGutter) {
+                inGutter = false;
+                const width = testX - currentStart;
+                if (width > bestGutterWidth) {
+                    bestGutterWidth = width;
+                    bestGutterStart = currentStart;
+                }
+            }
+        }
+    }
+    if (inGutter) {
+        const width = 380 - currentStart;
+        if (width > bestGutterWidth) {
+            bestGutterWidth = width;
+            bestGutterStart = currentStart;
+        }
+    }
+
+    if (bestGutterWidth >= 16) {
+        const splitX = Math.round(bestGutterStart + bestGutterWidth / 2);
+        const hasLeftText = secItems.some(it => it.x < splitX);
+        const hasRightText = secItems.some(it => it.x >= splitX);
+        if (hasLeftText && hasRightText) {
+            return [splitX];
+        }
+    }
+
+    // 2. Identify true bullet / item markers at the start of a column/line
     const bullets = secItems.filter(it => {
         const trimmed = it.str.trim();
         if (!BULLET_ITEM_PATTERN.test(trimmed)) return false;
@@ -1562,35 +1615,6 @@ function getColumnSplits(secItems) {
         }
     }
 
-    // 2. Gutter search fallback between 220 and 380
-    const intervals = secItems.map(it => {
-        const charWidth = /[\u4e00-\u9fa5]/.test(it.str) ? 10 : 6;
-        return { start: it.x, end: it.x + Math.max(it.str.length * charWidth, 10) };
-    });
-
-    let bestGutterStart = -1, bestGutterWidth = 0;
-    let inGutter = false, currentStart = 0;
-    for (let testX = 220; testX <= 380; testX += 2) {
-        const hasText = intervals.some(inv => testX >= inv.start && testX <= inv.end);
-        if (!hasText) {
-            if (!inGutter) {
-                inGutter = true;
-                currentStart = testX;
-            }
-        } else {
-            if (inGutter) {
-                inGutter = false;
-                const width = testX - currentStart;
-                if (width > bestGutterWidth) {
-                    bestGutterWidth = width;
-                    bestGutterStart = currentStart;
-                }
-            }
-        }
-    }
-    if (bestGutterWidth >= 16) {
-        return [Math.round(bestGutterStart + bestGutterWidth / 2)];
-    }
     return [];
 }
 
@@ -1693,6 +1717,11 @@ function assembleLinesIntoItems(lines, isNotes = false) {
 
         // 6. If previous line closed parenthesis and this line is at margin
         if (prevLine && /[)）]$/.test(prevText) && line.startX <= colMinX + 4) {
+            return true;
+        }
+
+        // 7. Outdent: if previous line was an indented bullet item, and current line starts at or near column base margin
+        if (prevLine && line.startX < prevLine.startX - 3 && line.startX <= colMinX + 5) {
             return true;
         }
 
