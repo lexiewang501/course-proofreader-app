@@ -288,12 +288,18 @@ function extractCourseIdentityFromWord(rows, course) {
     }
 
     // 1. Check for parentheses containing English name: (Azure Fundamentals) or （Blockchain Developer Course）
-    const parenMatch = rawTitle.match(/[(（]([^)）\u4e00-\u9fa5]*[A-Za-z]{2,}[^)）\u4e00-\u9fa5]*)[)）]/);
-    if (parenMatch) {
-        if (!rawEnTitle) {
-            rawEnTitle = parenMatch[1].trim();
+    // ONLY extract when English title is not yet found, and the parenthesized text is not just the course code!
+    if (!rawEnTitle) {
+        const parenMatch = rawTitle.match(/[(（]([^)）\u4e00-\u9fa5]*[A-Za-z]{2,}[^)）\u4e00-\u9fa5]*)[)）]/);
+        if (parenMatch) {
+            const inside = parenMatch[1].trim();
+            const isCode = (rawCode && cleanCourseCodeStr(inside) === cleanCourseCodeStr(rawCode)) ||
+                           (!rawCode && /^[A-Za-z0-9_-]{2,10}$/.test(inside));
+            if (!isCode) {
+                rawEnTitle = inside;
+                rawTitle = rawTitle.replace(parenMatch[0], ' ').trim();
+            }
         }
-        rawTitle = rawTitle.replace(parenMatch[0], ' ').trim();
     }
 
     // 2. Check for newlines in rawTitle
@@ -530,8 +536,13 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
     if (!enTitle) {
         const parenMatch = zhTitle.match(/[(（]([^)）\u4e00-\u9fa5]*[A-Za-z]{2,}[^)）\u4e00-\u9fa5]*)[)）]/);
         if (parenMatch) {
-            enTitle = parenMatch[1].trim();
-            zhTitle = zhTitle.replace(parenMatch[0], ' ').trim();
+            const inside = parenMatch[1].trim();
+            const isCode = (code && cleanCourseCodeStr(inside) === cleanCourseCodeStr(code)) ||
+                           (!code && /^[A-Za-z0-9_-]{2,10}$/.test(inside));
+            if (!isCode) {
+                enTitle = inside;
+                zhTitle = zhTitle.replace(parenMatch[0], ' ').trim();
+            }
         }
     }
 
@@ -4226,7 +4237,7 @@ function normalizeText(str) {
         .replace(/&lt;/gi, '<')
         .replace(/&gt;/gi, '>')
         .replace(/[\s\r\n\t\u3000]+/g, '')
-        .replace(/[，,。.:：;；()（）「」『』"'\-／/＋+\\®™©&]/g, '')
+        .replace(/[，,。.:：;；()（）「」『』"'\-–—－／/＋+\\®™©&~～]/g, '')
         .toLowerCase();
 }
 
