@@ -31,8 +31,8 @@ const LIST_FIELDS = new Set([
     '先修課程'
 ]);
 
-const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘)|$)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天歲折元點門科題人個\d]|分鐘)|$)|[【\[]\d+[】\]]|[•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
-const MODULE_HEADER_PATTERN = /^(?:[•●※·◆▪＊★☆✦✧-]\s*)?(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+/i;
+const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘)|$)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天歲折元點門科題人個\d]|分鐘)|$)|[【\[]\d+[】\]]|[\uf06c\uf06e\uf075•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
+const MODULE_HEADER_PATTERN = /^(?:[\uf06c\uf06e\uf075•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼-]\s*)?(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+/i;
 
 // Global Application State
 const state = {
@@ -242,7 +242,21 @@ function extractCourseIdentityFromWord(rows, course) {
                 if (!isNonCode && /^[A-Za-z0-9_-]{2,15}$/.test(r1c0)) {
                     rawCode = r1c0;
                     const r1Rest = rows[1].slice(1).map(c => c.fullText).join(' ').trim();
-                    if (r1Rest) rawEnTitle = r1Rest;
+                    if (r1Rest) {
+                        if (/[\u4e00-\u9fa5]/.test(r1Rest)) {
+                            // If row 1 rest contains Chinese characters (e.g. AU294 RHCE in Ansible－Red Hat紅帽系統管理III - Linux自動化),
+                            // row 0 was just a certification category banner, and row 1 is the actual course Chinese name!
+                            rawTitle = r1Rest;
+                            if (rows.length > 2 && rows[2].length >= 2) {
+                                const r2Rest = rows[2].slice(1).map(c => c.fullText).join(' ').trim() || rows[2].map(c => c.fullText).join(' ').trim();
+                                if (r2Rest && !/[\u4e00-\u9fa5]/.test(r2Rest) && !r2Rest.includes('時數') && !r2Rest.includes('費用')) {
+                                    rawEnTitle = r2Rest;
+                                }
+                            }
+                        } else {
+                            rawEnTitle = r1Rest;
+                        }
+                    }
                 }
             }
         }
@@ -821,7 +835,7 @@ async function parseDocx(buffer) {
                         }
                     }
                 } else if (matchedLabel === '課程內容' || matchedLabel === '備註事項') {
-                    const newItems = extractListItems(cellParas, cellFull);
+                    const newItems = extractListItems(cellParas, cellFull, matchedLabel === '備註事項');
                     course[matchedLabel] = Array.isArray(course[matchedLabel]) ? [...course[matchedLabel], ...newItems] : newItems;
                 } else if (matchedLabel === '後續推薦課程') {
                     const allParas = row.slice(1).flatMap(c => c.paragraphs).map(p => p.trim()).filter(Boolean);
@@ -1151,7 +1165,7 @@ function toCleanItemArray(val) {
 function cleanItemText(str) {
     if (!str) return '';
     return str
-        .replace(/^[\s•●\-\*※\d.、()（）]+/, '')
+        .replace(/^[\s\uf06c\uf06e\uf075•●\-\*※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼\d.、()（）]+/, '')
         .replace(/^(?:Domain\s*\d+|[A-Za-z]\d+(?:\.\d+)*|[A-Za-z])[.、)）\s]+/i, '')
         .trim();
 }
@@ -1162,7 +1176,7 @@ function cleanItemText(str) {
  */
 function splitInlineBullets(text) {
     if (!text) return [];
-    const parts = text.split(/(?<=[^\s])\s+(?=(?:\d+[.、](?!\d)|[•●※·◆▪＊★☆✦✧])\s*)/);
+    const parts = text.split(/(?<=[^\s])\s+(?=(?:\d+[.、](?!\d)|[\uf06c\uf06e\uf075•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼])\s*)/);
     return parts.map(p => p.trim()).filter(Boolean);
 }
 
@@ -1172,7 +1186,7 @@ function splitInlineBullets(text) {
  */
 function splitOutlineItems(text) {
     if (!text) return [];
-    const parts = text.split(/(?=(?<=^|[\s\r\n])(?<!Top\s*|top\s*|OS\s*|os\s*|v\s*|V\s*|ver\s*|version\s*)\d{1,2}[.、](?=(?:\s+|[\u4e00-\u9fa5➔→•(（【\["'「『]))|(?<=^|[\s\r\n])\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[•●※·◆▪＊★☆✦✧]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
+    const parts = text.split(/(?=(?<=^|[\s\r\n])(?<!Top\s*|top\s*|OS\s*|os\s*|v\s*|V\s*|ver\s*|version\s*)\d{1,2}[.、](?=(?:\s+|[\u4e00-\u9fa5➔→•(（【\["'「『]))|(?<=^|[\s\r\n])\d+-\d+(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[\uf06c\uf06e\uf075•●※·◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
     const res = [];
     let cur = '';
     for (const p of parts) {
@@ -1202,7 +1216,7 @@ function splitOutlineItems(text) {
  * If paragraphs contain embedded bullets or numbering, splits them cleanly.
  * Also separates compound discount scheme headers (e.g. 課程優惠方案：接早鳥優惠價：) into distinct items.
  */
-function extractListItems(paragraphs, fullText) {
+function extractListItems(paragraphs, fullText, isNotes = false) {
     const DISCOUNT_HEADER_SPLIT = /(?<=[^\s\d.、()（）:：])\s+(?=(?:早鳥優惠|早鳥優惠價|限時優惠|專案優惠|續報優惠|學生優惠|學生優惠價|學生專屬優惠|企業優惠|原廠優惠|證照優惠|重聽服務|重聽優惠|重聽優惠方案|總複習優惠|方案\s*[一二三四五六七八九十\d]+)[：:])/;
     if (paragraphs && paragraphs.length > 0) {
         paragraphs = paragraphs.flatMap(p => {
@@ -1276,8 +1290,14 @@ function extractListItems(paragraphs, fullText) {
             // NEVER merge sub-items into a Module/Chapter heading!
             items.push(item);
         } else if (isTopicWithColon) {
-            // Standalone sub-topic with title colon (e.g. 存取控制與雲端模型：...), never merge into prev
-            items.push(item);
+            const isDiscountScheme = /(?:課程優惠方案|早鳥優惠|限時優惠|專案優惠|續報優惠|學生優惠|企業優惠|原廠優惠|證照優惠|重聽服務|重聽優惠|總複習優惠|方案\s*[一二三四五六七八九十\d]+)[：:]/.test(item);
+            if (isNotes && !isDiscountScheme && prevIsBullet && !prevItem.endsWith('：') && !prevItem.endsWith(':')) {
+                // In notes (備註事項), unnumbered sub-clauses (e.g. 證照寄發：..., 通過標準：...) belong to preceding note body
+                items[items.length - 1] += ' ' + item;
+            } else {
+                // Standalone sub-topic with title colon (e.g. 存取控制與雲端模型：...), never merge into prev
+                items.push(item);
+            }
         } else if (prevIsBullet && !prevItem.endsWith('：') && !prevItem.endsWith(':')) {
             // Unnumbered paragraph following a bullet item: append as body text
             items[items.length - 1] += ' ' + item;
@@ -1867,6 +1887,40 @@ function analyzeItemHierarchy(itemText, prevH, fieldLabel) {
 }
 
 /**
+ * Extracts a normalized semantic bullet identity for list alignment.
+ * E.g. "3. .本課程..." -> "num:3", "4. 考試..." -> "num:4", "Module 1" -> "mod:1", "一、" -> "zh:1"
+ */
+function getListBulletIdentity(item) {
+    if (!item) return null;
+    const str = item.trim();
+    // 1. Module / Chapter / Lesson headers (e.g. Module 1, Lesson 2, 第1章, Unit 3)
+    const mMod = str.match(/^(?:[•●※·◆▪＊★☆✦✧-]\s*)?(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*([一二三四五六七八九十\d]+)/i);
+    if (mMod) return 'mod:' + mMod[1].toLowerCase();
+
+    // 2. Arabic numbering: 1., 2., 10., 1、, 2、, 1．
+    const mNum = str.match(/^(\d+)[.、．](?!\d)/);
+    if (mNum) return 'num:' + parseInt(mNum[1], 10);
+
+    // 3. Multi-level numbering: 1.1, 1.2, 2.1
+    const mMulti = str.match(/^(\d+(?:\.\d+)+)[.、．\s]/);
+    if (mMulti) return 'multi:' + mMulti[1];
+
+    // 4. Circled numbers: ①, ②, ❶
+    const mCirc = str.match(/^([①-⑳❶-❿㈠-㈩])/);
+    if (mCirc) return 'circ:' + mCirc[1];
+
+    // 5. Chinese numbers: 一、, 二、, （一）, (1)
+    const mZh = str.match(/^(?:[（(]([一二三四五六七八九十百\d]+)[)）]|([一二三四五六七八九十百]+)[、.．])/);
+    if (mZh) return 'zh:' + (mZh[1] || mZh[2]);
+
+    // 6. Letter bullets: A., B., a., b.
+    const mAlpha = str.match(/^([A-Za-z])[.、)）]\s/);
+    if (mAlpha) return 'alpha:' + mAlpha[1].toUpperCase();
+
+    return null;
+}
+
+/**
  * Needleman-Wunsch sequence alignment for Word and PDF list items.
  * Guarantees optimal horizontal alignment so missing or modified items are clearly visible side-by-side.
  */
@@ -1884,20 +1938,37 @@ function alignListItems(wItems, pItems, fieldLabel) {
     function score(i, j) {
         const w = sortedW[i];
         const p = sortedP[j];
+        const wBullet = getListBulletIdentity(w);
+        const pBullet = getListBulletIdentity(p);
+
         const wNorm = normalizeText(cleanItemText(w));
         const pNorm = normalizeText(cleanItemText(p));
         if (!wNorm && !pNorm) return 1.0;
-        if (wNorm === pNorm) return 2.0;
+        if (wNorm === pNorm) return (wBullet && pBullet && wBullet === pBullet) ? 3.0 : 2.0;
+
         const sim = calculateSimilarity(wNorm, pNorm);
+        let baseScore = -1.0;
         if (sim >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm)) {
-            return 1.0 + sim;
+            baseScore = 1.0 + sim;
+        } else {
+            const wNormNoUrl = wNorm.replace(/https?[a-z0-9_./-]+/gi, '');
+            const pNormNoUrl = pNorm.replace(/https?[a-z0-9_./-]+/gi, '');
+            if (wNormNoUrl.length >= 4 && (wNormNoUrl === pNormNoUrl || wNormNoUrl.includes(pNormNoUrl) || pNormNoUrl.includes(wNormNoUrl) || calculateSimilarity(wNormNoUrl, pNormNoUrl) >= 0.7)) {
+                baseScore = 1.5;
+            }
         }
-        const wNormNoUrl = wNorm.replace(/https?[a-z0-9_./-]+/gi, '');
-        const pNormNoUrl = pNorm.replace(/https?[a-z0-9_./-]+/gi, '');
-        if (wNormNoUrl.length >= 4 && (wNormNoUrl === pNormNoUrl || wNormNoUrl.includes(pNormNoUrl) || pNormNoUrl.includes(wNormNoUrl) || calculateSimilarity(wNormNoUrl, pNormNoUrl) >= 0.7)) {
-            return 1.5;
+
+        // Semantic Bullet Awareness:
+        if (wBullet && pBullet) {
+            if (wBullet === pBullet) {
+                // Matching bullet identity receives a significant bonus
+                if (baseScore > 0) baseScore += 1.0;
+            } else if (baseScore < 2.0 && sim < 0.8) {
+                // Conflicting bullet identity AND text does not strongly match: severe mismatch penalty!
+                return -2.0;
+            }
         }
-        return -1.0;
+        return baseScore;
     }
 
     const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
@@ -1940,13 +2011,28 @@ function alignListItems(wItems, pItems, fieldLabel) {
         let end = cIdx;
         let wCount = 0, pCount = 0;
         const wTexts = [], pTexts = [];
+        let initialWBullet = null, initialPBullet = null;
 
         while (end < aligned.length) {
             const cur = aligned[end];
+            const curWBullet = cur.word ? getListBulletIdentity(cur.word) : null;
+            const curPBullet = cur.pdf ? getListBulletIdentity(cur.pdf) : null;
+
             // If cur is a structural module/chapter header, do not swallow it into an ongoing consolidation block
             if ((wCount > 0 || pCount > 0) && ((cur.word && MODULE_HEADER_PATTERN.test(cur.word.trim())) || (cur.pdf && MODULE_HEADER_PATTERN.test(cur.pdf.trim())))) {
                 break;
             }
+
+            // CRITICAL SEMANTIC RULE: Never consolidate across different explicit bullet items!
+            if (curWBullet) {
+                if (!initialWBullet) initialWBullet = curWBullet;
+                else if (initialWBullet !== curWBullet) break;
+            }
+            if (curPBullet) {
+                if (!initialPBullet) initialPBullet = curPBullet;
+                else if (initialPBullet !== curPBullet) break;
+            }
+
             if (cur.word) { wCount++; wTexts.push(cur.word); }
             if (cur.pdf) { pCount++; pTexts.push(cur.pdf); }
 
@@ -1975,7 +2061,7 @@ function alignListItems(wItems, pItems, fieldLabel) {
                     if (nextPdfItem) {
                         const nextPNorm = normalizeText(cleanItemText(nextPdfItem));
                         if (candWNorm.length >= 4 && (nextPNorm.includes(candWNorm) || candWNorm.includes(nextPNorm) || calculateSimilarity(candWNorm, nextPNorm) >= 0.5)) {
-                            if (sim >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm)) {
+                            if (sim >= 0.7 || pNorm.includes(wNorm)) {
                                 consolidated.push({
                                     word: wTexts.join('\n'),
                                     pdf: pTexts.join('\n')
@@ -2003,7 +2089,7 @@ function alignListItems(wItems, pItems, fieldLabel) {
                     if (nextWordItem) {
                         const nextWNorm = normalizeText(cleanItemText(nextWordItem));
                         if (candPNorm.length >= 4 && (nextWNorm.includes(candPNorm) || candPNorm.includes(nextWNorm) || calculateSimilarity(candPNorm, nextWNorm) >= 0.5)) {
-                            if (sim >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm)) {
+                            if (sim >= 0.7 || wNorm.includes(pNorm)) {
                                 consolidated.push({
                                     word: wTexts.join('\n'),
                                     pdf: pTexts.join('\n')
@@ -2017,14 +2103,26 @@ function alignListItems(wItems, pItems, fieldLabel) {
                     continue;
                 }
 
-                if (sim >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm)) {
-                    consolidated.push({
-                        word: wTexts.join('\n'),
-                        pdf: pTexts.join('\n')
-                    });
-                    cIdx = end;
-                    wCount = -1;
-                    break;
+                if (wCount >= 2 && pCount === 1) {
+                    if (sim >= 0.7 || pNorm.includes(wNorm)) {
+                        consolidated.push({
+                            word: wTexts.join('\n'),
+                            pdf: pTexts.join('\n')
+                        });
+                        cIdx = end;
+                        wCount = -1;
+                        break;
+                    }
+                } else if (wCount === 1 && pCount >= 2) {
+                    if (sim >= 0.7 || wNorm.includes(pNorm)) {
+                        consolidated.push({
+                            word: wTexts.join('\n'),
+                            pdf: pTexts.join('\n')
+                        });
+                        cIdx = end;
+                        wCount = -1;
+                        break;
+                    }
                 }
             }
         }
@@ -2367,12 +2465,17 @@ function compareSinglePair(w, p) {
     const wZhNorm = normalizeText(wNameZh);
     const pZhNorm = normalizeText(pNameZh);
 
+    const stripParens = s => s.replace(/[（(][^）)]*[)）]/g, '').trim();
+    const wZhStrip = normalizeText(stripParens(wNameZh));
+    const pZhStrip = normalizeText(stripParens(pNameZh));
+
     if (!wZhNorm && !pZhNorm) {
         fields['中文課名'] = { label: '中文課名', word: '(無)', pdf: '(無)', status: 'green', desc: '雙方皆無中文課名' };
     } else if (wZhNorm === pZhNorm) {
         fields['中文課名'] = { label: '中文課名', word: wNameZh, pdf: pNameZh, status: 'green', desc: '中文課名完全相符' };
-    } else if (calculateSimilarity(wZhNorm, pZhNorm) > 0.85 || wZhNorm.includes(pZhNorm) || pZhNorm.includes(wZhNorm)) {
-        fields['中文課名'] = { label: '中文課名', word: wNameZh, pdf: pNameZh, status: 'yellow', desc: '中文課名文字微差' };
+    } else if (calculateSimilarity(wZhNorm, pZhNorm) > 0.85 || wZhNorm.includes(pZhNorm) || pZhNorm.includes(wZhNorm) ||
+               (wZhStrip && pZhStrip && (wZhStrip === pZhStrip || calculateSimilarity(wZhStrip, pZhStrip) > 0.80 || wZhStrip.includes(pZhStrip) || pZhStrip.includes(wZhStrip)))) {
+        fields['中文課名'] = { label: '中文課名', word: wNameZh, pdf: pNameZh, status: 'yellow', desc: '中文課名文字微差 (含括號補充說明)' };
         hasYellow = true;
     } else {
         fields['中文課名'] = { label: '中文課名', word: wNameZh || '(無)', pdf: pNameZh || '(漏排)', status: 'red', desc: '中文課名不一致或錯字！' };
@@ -2431,16 +2534,37 @@ function compareSinglePair(w, p) {
         hasRed = true;
     }
 
-    // 4. 點數 (Rule 4: Mismatch is RED)
+    // 4. 點數 (Rule 4: Mismatch is RED, blank in PDF draft is YELLOW)
     const wPoints = parseFloat(w['點數']) || 0;
     const pPoints = parseFloat(p['點數']) || 0;
+    const wHasPoints = Boolean(w['點數'] && String(w['點數']).trim() && wPoints > 0);
+    const pHasPoints = Boolean(p['點數'] && String(p['點數']).trim() && pPoints > 0);
+
     if (wPoints > 0 && pPoints > 0 && wPoints === pPoints) {
         fields['點數'] = { label: '點數', word: `${w['點數']} 點`, pdf: `${p['點數']} 點`, status: 'green', desc: '點數相符' };
-    } else if (w['點數'] || p['點數']) {
+    } else if (wHasPoints && !pHasPoints) {
         fields['點數'] = {
             label: '點數',
-            word: `${w['點數'] || 0} 點`,
-            pdf: `${p['點數'] || 0} 點`,
+            word: `${w['點數']} 點`,
+            pdf: '(空白待補)',
+            status: 'yellow',
+            desc: `PDF 點數欄位留白未填，Word 原稿為 ${w['點數']} 點`
+        };
+        hasYellow = true;
+    } else if (!wHasPoints && pHasPoints) {
+        fields['點數'] = {
+            label: '點數',
+            word: '(無)',
+            pdf: `${p['點數']} 點`,
+            status: 'yellow',
+            desc: `Word 原稿無點數，PDF 排版標註 ${p['點數']} 點`
+        };
+        hasYellow = true;
+    } else if (wPoints > 0 && pPoints > 0 && wPoints !== pPoints) {
+        fields['點數'] = {
+            label: '點數',
+            word: `${w['點數']} 點`,
+            pdf: `${p['點數']} 點`,
             status: 'red',
             desc: `點數不一致！Word 為 ${w['點數']} 點，但 PDF 為 ${p['點數']} 點`
         };
@@ -2449,12 +2573,33 @@ function compareSinglePair(w, p) {
         fields['點數'] = { label: '點數', word: '無', pdf: '無', status: 'green', desc: '雙方皆無點數' };
     }
 
-    // 5. 費用
+    // 5. 費用 (Rule 4: Mismatch is RED, blank in PDF draft is YELLOW)
     const wPrice = parseInt(w['費用'], 10) || 0;
     const pPrice = parseInt(p['費用'], 10) || 0;
+    const wHasPrice = Boolean(w['費用'] && String(w['費用']).trim() && wPrice > 0);
+    const pHasPrice = Boolean(p['費用'] && String(p['費用']).trim() && pPrice > 0);
+
     if (wPrice > 0 && pPrice > 0 && wPrice === pPrice) {
         fields['費用'] = { label: '費用', word: `${wPrice.toLocaleString()} 元`, pdf: `${pPrice.toLocaleString()} 元`, status: 'green', desc: '費用相符' };
-    } else if (wPrice !== pPrice) {
+    } else if (wHasPrice && !pHasPrice) {
+        fields['費用'] = {
+            label: '費用',
+            word: `${wPrice.toLocaleString()} 元`,
+            pdf: '(空白待補)',
+            status: 'yellow',
+            desc: `PDF 費用欄位留白未填，Word 原稿為 ${wPrice.toLocaleString()} 元`
+        };
+        hasYellow = true;
+    } else if (!wHasPrice && pHasPrice) {
+        fields['費用'] = {
+            label: '費用',
+            word: '(無)',
+            pdf: `${pPrice.toLocaleString()} 元`,
+            status: 'yellow',
+            desc: `Word 原稿無費用，PDF 排版標註 ${pPrice.toLocaleString()} 元`
+        };
+        hasYellow = true;
+    } else if (wPrice > 0 && pPrice > 0 && wPrice !== pPrice) {
         fields['費用'] = {
             label: '費用',
             word: `${wPrice.toLocaleString()} 元`,
@@ -2662,18 +2807,18 @@ function compareSinglePair(w, p) {
         fields['後續推薦課程'] = {
             label: '後續推薦課程',
             isList: true,
-            status: 'red',
-            desc: 'PDF 漏排首門推薦課程！',
+            status: 'yellow',
+            desc: 'PDF 未排入推薦課程 (版面精簡或免排)',
             details: wRecList.map((c, idx) => ({
                 index: idx + 1,
                 word: c + (idx === 0 ? ' (首門推薦)' : ' (依規則免排PDF)'),
-                pdf: idx === 0 ? null : '(依規則免排)',
-                status: idx === 0 ? 'red' : 'gray',
-                desc: idx === 0 ? 'PDF 漏排此首門推薦課程！' : '第2門以上未排PDF視為正常',
+                pdf: '(版面精簡未排)',
+                status: 'gray',
+                desc: idx === 0 ? 'PDF 未排入推薦課程 (版面精簡或免排)' : '第2門以上未排PDF視為正常',
                 hierarchy: { level: 1, type: 'number', badgeText: String(idx + 1), indent: '', cleanText: c }
             }))
         };
-        hasRed = true;
+        hasYellow = true;
     } else if (wRecList.length === 0 && pRecList.length > 0) {
         fields['後續推薦課程'] = {
             label: '後續推薦課程',
