@@ -3559,15 +3559,35 @@ function compareSinglePair(w, p) {
         const normCleanWordObj = normalizeText(toCleanItemArray(wObjStr).map(cleanItemText).join(''));
         const normCleanPdfObj = normalizeText(toCleanItemArray(objTextToCompare).map(cleanItemText).join(''));
 
-        if (wObjNorm === normPdfObj || (normCleanWordObj && normCleanWordObj === normCleanPdfObj)) {
+        if (wObjNorm === normPdfObj) {
             fields['課程目標'] = {
                 label: '課程目標',
                 layoutTag: 'adopted-objective',
                 word: wObjStr,
                 pdf: objTextToCompare,
                 status: 'green',
-                desc: '課程目標完全相符 (本課採「課程目標」排版)'
+                desc: '課程目標完全相符' + (layoutMode === 'both' ? '' : ' (本課採「課程目標」排版)')
             };
+        } else if (normCleanWordObj && normCleanWordObj === normCleanPdfObj) {
+            const wLines = toCleanItemArray(wObjStr);
+            const pLines = toCleanItemArray(objTextToCompare);
+            const wHasNumbers = wLines.some(l => /^\s*\d+[.、)）\s]/.test(l));
+            const pHasNumbers = pLines.some(l => /^\s*\d+[.、)）\s]/.test(l));
+
+            let yellowDesc = '課程目標內文相符，但項目標號或排版符號有微差';
+            if (wHasNumbers && !pHasNumbers) {
+                yellowDesc = '課程目標內文相符，但美編 PDF 遺漏了項目編號 (如 1. 2. 3.)';
+            }
+
+            fields['課程目標'] = {
+                label: '課程目標',
+                layoutTag: 'adopted-objective',
+                word: wObjStr,
+                pdf: objTextToCompare,
+                status: 'yellow',
+                desc: yellowDesc + (layoutMode === 'both' ? '' : ' (本課採「課程目標」排版)')
+            };
+            hasYellow = true;
         } else if (calculateSimilarity(wObjNorm, normPdfObj) > 0.70 ||
                    calculateSimilarity(normCleanWordObj, normCleanPdfObj) > 0.70 ||
                    wObjNorm.includes(normPdfObj) || normPdfObj.includes(wObjNorm) ||
