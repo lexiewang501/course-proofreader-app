@@ -1822,6 +1822,44 @@ function extractListFromPdfSection(secItems, isNotes = false) {
         return assembleLinesIntoItems(lines, isNotes);
     }
 
+    const splitX = splits[0];
+
+    // Check if right column starts at some Y lower than top items, and items above it cross splitX
+    const bullets = secItems.filter(it => {
+        const trimmed = it.str.trim();
+        if (!BULLET_ITEM_PATTERN.test(trimmed)) return false;
+        const hasPreceding = secItems.some(other => 
+            other !== it && 
+            Math.abs(other.y - it.y) <= 3.5 && 
+            other.x < it.x && 
+            (other.x + (other.w || (other.str.length * (/[一-龥]/.test(other.str) ? 10 : 6)))) >= it.x - 2
+        );
+        return !hasPreceding;
+    });
+
+    const rightBullets = bullets.filter(b => b.x >= splitX - 10);
+    if (rightBullets.length > 0) {
+        const maxRightY = Math.max(...rightBullets.map(b => b.y));
+        const itemsAbove = secItems.filter(it => it.y > maxRightY + 4);
+        
+        const hasCrossingAbove = itemsAbove.some(it => {
+            const charW = /[一-龥]/.test(it.str) ? 10 : 6;
+            const right = it.x + (it.w || it.str.length * charW);
+            return it.x < splitX - 5 && right > splitX + 5;
+        });
+
+        if (hasCrossingAbove && itemsAbove.length > 0) {
+            const headerItems = itemsAbove;
+            const colItems = secItems.filter(it => it.y <= maxRightY + 4);
+
+            const headerLines = groupItemsIntoVisualLines(headerItems);
+            const headerAssembled = assembleLinesIntoItems(headerLines, isNotes);
+
+            const colAssembled = extractListFromPdfSection(colItems, isNotes);
+            return [...headerAssembled, ...colAssembled];
+        }
+    }
+
     const colItems = [];
     for (let i = 0; i <= splits.length; i++) {
         const minX = i === 0 ? 0 : splits[i - 1];
