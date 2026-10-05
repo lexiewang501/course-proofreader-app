@@ -2074,6 +2074,17 @@ function analyzeItemHierarchy(itemText, prevH, fieldLabel) {
     // 1. Explicit bullet dot (●, •, ※, ·, ‧, ・, -, *)
     const bMatch = raw.match(/^([●•※\-\*·‧・▪])\s*(.*)$/);
     if (bMatch) {
+        // Check if the bullet is followed by a multi-level number like - 1.1 or • 2-1
+        const subNumInBullet = (bMatch[2] || '').match(/^(\d+(?:[.-]\d+)+)[.、．\s]*(.*)$/);
+        if (subNumInBullet) {
+            return {
+                level: 2,
+                type: 'sub-number',
+                badgeText: subNumInBullet[1],
+                indent: 'md:ml-6 ml-3 pl-2.5 border-l-2 border-indigo-200/70',
+                cleanText: raw
+            };
+        }
         return {
             level: 2,
             type: 'bullet',
@@ -2083,7 +2094,45 @@ function analyzeItemHierarchy(itemText, prevH, fieldLabel) {
         };
     }
 
-    // 2. Explicit numbered items (1., 2., 3., 1、, 2、, etc.) - NEVER match decimals like 1.5!
+    // 2. Multi-level hyphen sub-numbering (1-1, 1-2, 1-2-1, 5-1, 4-4-5)
+    const multiHyphenMatch = raw.match(/^(\d+(?:-\d+)+)[.、．\s]*(.*)$/);
+    if (multiHyphenMatch) {
+        const parts = multiHyphenMatch[1].split('-');
+        return {
+            level: parts.length > 2 ? 3 : 2,
+            type: 'sub-number',
+            badgeText: multiHyphenMatch[1],
+            indent: parts.length > 2 ? 'md:ml-10 ml-5 pl-2.5 border-l-2 border-indigo-200/60' : 'md:ml-6 ml-3 pl-2.5 border-l-2 border-indigo-200/70',
+            cleanText: raw
+        };
+    }
+
+    // 3. Multi-level dotted sub-numbering (1.1, 1.2, 1.1.1, 2.1)
+    const multiDotMatch = raw.match(/^(\d+(?:\.\d+)+)[.、．\s]*(.*)$/);
+    if (multiDotMatch) {
+        const parts = multiDotMatch[1].split('.');
+        return {
+            level: parts.length > 2 ? 3 : 2,
+            type: 'sub-number',
+            badgeText: multiDotMatch[1],
+            indent: parts.length > 2 ? 'md:ml-10 ml-5 pl-2.5 border-l-2 border-indigo-200/60' : 'md:ml-6 ml-3 pl-2.5 border-l-2 border-indigo-200/70',
+            cleanText: raw
+        };
+    }
+
+    // 4. Parenthesized sub-numbering: (1), (2), （一）
+    const parenSubMatch = raw.match(/^[（(](\d+)[)）]\s*(.*)$/);
+    if (parenSubMatch) {
+        return {
+            level: 2,
+            type: 'sub-number',
+            badgeText: '(' + parenSubMatch[1] + ')',
+            indent: 'md:ml-6 ml-3 pl-2.5 border-l-2 border-indigo-200/70',
+            cleanText: raw
+        };
+    }
+
+    // 5. Explicit numbered items (1., 2., 3., 1、, 2、, etc.) - NEVER match decimals like 1.5!
     const nMatch = raw.match(/^(\d+)[.、]\s*(.*)$/);
     if (nMatch && !/^\d+\.\d/.test(raw)) {
         return {
@@ -2095,7 +2144,7 @@ function analyzeItemHierarchy(itemText, prevH, fieldLabel) {
         };
     }
 
-    // 3. Section/Scheme Header ending with colon (e.g. 課程優惠方案：, 重聽服務：, 實務應用：)
+    // 6. Section/Scheme Header ending with colon (e.g. 課程優惠方案：, 重聽服務：, 實務應用：)
     const hMatch = raw.match(/^([^：:\n]{2,10})[：:]\s*(.*)$/);
     if (hMatch && (!hMatch[2] || hMatch[2].length === 0)) {
         return {
@@ -2107,7 +2156,7 @@ function analyzeItemHierarchy(itemText, prevH, fieldLabel) {
         };
     }
 
-    // 4. Sub-clauses under a header (e.g. 限時優惠：..., 續報優惠：..., 學生優惠價：...)
+    // 7. Sub-clauses under a header (e.g. 限時優惠：..., 續報優惠：..., 學生優惠價：...)
     if (fieldLabel === '備註事項' && prevH && (prevH.type === 'header' || (prevH.type === 'number' && /優惠方案/.test(prevH.cleanText)) || prevH.type === 'sub-clause')) {
         if (/^(?:限時|續報|學生|早鳥|企業|校園|加贈|贈送)/.test(raw)) {
             return {
@@ -2144,9 +2193,9 @@ function getListBulletIdentity(item) {
     const mNum = str.match(/^(\d+)[.、．](?!\d)/);
     if (mNum) return 'num:' + parseInt(mNum[1], 10);
 
-    // 3. Multi-level numbering: 1.1, 1.2, 2.1
-    const mMulti = str.match(/^(\d+(?:\.\d+)+)[.、．\s]/);
-    if (mMulti) return 'multi:' + mMulti[1];
+    // 3. Multi-level numbering: 1.1, 1.2, 2.1, 1-1, 1-2, 5-1
+    const mMulti = str.match(/^(?:[●•※\-\*·‧・▪]\s*)?(\d+(?:[.-]\d+)+)[.、．\s]?/);
+    if (mMulti) return 'multi:' + mMulti[1].replace(/-/g, '.');
 
     // 4. Circled numbers: ①, ②, ❶
     const mCirc = str.match(/^([①-⑳❶-❿㈠-㈩])/);
@@ -2160,6 +2209,140 @@ function getListBulletIdentity(item) {
     const mAlpha = str.match(/^([A-Za-z])[.、)）]\s/);
     if (mAlpha) return 'alpha:' + mAlpha[1].toUpperCase();
 
+    return null;
+}
+
+/**
+ * Detects whether an outline list item is a subordinate sub-item (e.g. 1-1, 1.1, (1), bullet).
+ */
+function isOutlineSubItem(raw) {
+    if (!raw) return false;
+    const str = raw.trim();
+    if (/^(?:[●•※\-\*·‧・▪]\s*)?\d+(?:-\d+)+/.test(str)) return true;
+    if (/^(?:[●•※\-\*·‧・▪]\s*)?\d+(?:\.\d+)+/.test(str)) return true;
+    if (/^[（(]\d+[)）]/.test(str)) return true;
+    if (/^[●•※\-\*·‧・▪]/.test(str)) return true;
+    return false;
+}
+
+/**
+ * Detects whether an outline list item is a top-level chapter header (e.g. 1., 2., Module 1, 一、).
+ */
+function isOutlineMainChapter(raw) {
+    if (!raw) return false;
+    const str = raw.trim();
+    if (isOutlineSubItem(str)) return false;
+    if (/^(?:Module|Chapter|Unit|Lesson|Domain|Part|Phase|主題|單元|章節|第[一二三四五六七八九十\d]+[章單元節])/i.test(str)) return true;
+    if (/^[一二三四五六七八九十]+[、.．]/.test(str)) return true;
+    if (/^\d+[.、．\s]/.test(str)) return true;
+    if (/^\d+\s*[\u4e00-\u9fa5A-Za-z]/.test(str)) return true;
+    return false;
+}
+
+/**
+ * Aligns Word outline against PDF outline when PDF adopts "大綱主章節精簡排版" (Main Chapter Outline Layout).
+ * Matches all main chapters 1:1, and marks omitted sub-items as GRAY (免排，正常).
+ */
+function alignOutlineWithChapters(wItems, pItems) {
+    if (!wItems || !pItems) return null;
+    const wMainIndices = [];
+    wItems.forEach((it, idx) => {
+        if (isOutlineMainChapter(it)) wMainIndices.push(idx);
+    });
+
+    const isSubOnly = wItems.some(isOutlineSubItem);
+    const pAllMain = pItems.every(isOutlineMainChapter);
+
+    if (wMainIndices.length >= 2 && isSubOnly && pItems.length >= 2 && pItems.length <= wMainIndices.length + 2 && pAllMain) {
+        const wMainTexts = wMainIndices.map(idx => wItems[idx]);
+        let matchCount = 0;
+        pItems.forEach(pi => {
+            const pNorm = normalizeText(cleanItemText(pi));
+            const matched = wMainTexts.some(wi => {
+                const wNorm = normalizeText(cleanItemText(wi));
+                return wNorm === pNorm || calculateSimilarity(wNorm, pNorm) >= 0.65 || wNorm.includes(pNorm) || pNorm.includes(wNorm);
+            });
+            if (matched) matchCount++;
+        });
+
+        if (matchCount / pItems.length >= 0.70) {
+            const mainAligned = alignListItems(wMainTexts, pItems, '課程大綱主章節');
+            const details = [];
+            let wMainCursor = 0;
+            let hasRed = false;
+            let hasYellow = false;
+
+            for (let i = 0; i < wItems.length; i++) {
+                const wItem = wItems[i];
+                if (wMainIndices.includes(i)) {
+                    const mainPair = mainAligned.details[wMainCursor];
+                    wMainCursor++;
+                    if (mainPair) {
+                        if (mainPair.status === 'red') hasRed = true;
+                        if (mainPair.status === 'yellow') hasYellow = true;
+                        details.push({
+                            index: details.length + 1,
+                            status: mainPair.status,
+                            word: wItem,
+                            pdf: mainPair.pdf,
+                            desc: mainPair.desc,
+                            hierarchy: analyzeItemHierarchy(wItem, null, '課程內容')
+                        });
+                    } else {
+                        hasRed = true;
+                        details.push({
+                            index: details.length + 1,
+                            status: 'red',
+                            word: wItem,
+                            pdf: '(PDF 漏排此章節)',
+                            desc: 'PDF 漏排大綱主章節',
+                            hierarchy: analyzeItemHierarchy(wItem, null, '課程內容')
+                        });
+                    }
+                } else {
+                    const subH = analyzeItemHierarchy(wItem, null, '課程內容');
+                    if (subH.level < 2) subH.level = 2;
+                    details.push({
+                        index: details.length + 1,
+                        status: 'gray',
+                        word: wItem,
+                        pdf: '(大綱主章節排版，細項免排)',
+                        desc: '美編採大綱主章節排版，此細項依版面精簡免排 (正常)',
+                        hierarchy: subH
+                    });
+                }
+            }
+
+            const extraPdf = mainAligned.details.filter(d => !d.word && d.pdf);
+            extraPdf.forEach(ep => {
+                hasYellow = true;
+                details.push({
+                    index: details.length + 1,
+                    status: 'yellow',
+                    word: null,
+                    pdf: ep.pdf,
+                    desc: 'PDF 多排此章節',
+                    hierarchy: ep.hierarchy
+                });
+            });
+
+            let overallStatus = 'green';
+            if (hasRed) overallStatus = 'red';
+            else if (hasYellow) overallStatus = 'yellow';
+
+            const matchedChaps = mainAligned.details.filter(d => d.word && d.pdf && (d.status === 'green' || d.status === 'yellow')).length;
+            const desc = hasRed 
+                ? `課程內容有缺漏或不符 (採大綱主章節排版，Word: ${wMainTexts.length}章, PDF: ${pItems.length}章)`
+                : `課程內容相符 (美編採大綱主章節排版，共 ${matchedChaps} 個主章節相符，細項依版面精簡免排)`;
+
+            return {
+                status: overallStatus,
+                desc,
+                details,
+                isMainChapterOutline: true
+            };
+        }
+    }
     return null;
 }
 
@@ -3061,21 +3244,28 @@ function compareSinglePair(w, p) {
             ? (p['課程目標_items'] || splitOutlineItems(pObjStr))
             : pContentArr;
 
-        const contentDiff = alignListItems(
+        const chapterDiff = alignOutlineWithChapters(wContentArr, contentItemsToCompare);
+        const contentDiff = chapterDiff || alignListItems(
             wContentArr,
             contentItemsToCompare,
             '課程內容'
         );
+        const isChapterLayout = Boolean(chapterDiff);
+        if (isChapterLayout) {
+            layoutModeText = layoutMode === 'both' ? '課程目標與大綱主章節' : '課程大綱主章節';
+        }
+
         fields['課程內容'] = {
             label: '課程內容',
             isList: true,
-            layoutTag: 'adopted-content',
+            layoutTag: isChapterLayout ? 'adopted-chapters' : 'adopted-content',
+            isMainChapterOutline: isChapterLayout,
             word: `${wContentArr.length} 個項目`,
             pdf: `${contentItemsToCompare.length} 個項目`,
             wordItems: wContentArr,
             pdfItems: contentItemsToCompare,
             status: contentDiff.status,
-            desc: contentDiff.desc + (layoutMode === 'both' ? ' (同時排入目標與內容)' : ' (本課採「課程內容」排版)'),
+            desc: contentDiff.desc + (isChapterLayout ? '' : (layoutMode === 'both' ? ' (同時排入目標與內容)' : ' (本課採「課程內容」排版)')),
             details: contentDiff.details
         };
         if (contentDiff.status === 'red') hasRed = true;
@@ -3732,9 +3922,9 @@ function createCourseCard(item, idx) {
                 } else if (h.type === 'bullet' || h.type === 'sub-clause') {
                     wBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-600 shrink-0 mt-0.5">●</span>`;
                     pBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold ${pBadgeBg} shrink-0 mt-0.5">●</span>`;
-                } else if (h.type === 'number' && h.badgeText) {
-                    wBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-3xs font-mono font-bold bg-slate-100 text-slate-700 shrink-0 mt-0.5">${h.badgeText}</span>`;
-                    pBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-3xs font-mono font-bold ${pBadgeBg} shrink-0 mt-0.5">${h.badgeText}</span>`;
+                } else if ((h.type === 'number' || h.type === 'sub-number') && h.badgeText) {
+                    wBadgeHtml = `<span class="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-3xs font-mono font-bold bg-slate-100 text-slate-700 shrink-0 mt-0.5">${h.badgeText}</span>`;
+                    pBadgeHtml = `<span class="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-3xs font-mono font-bold ${pBadgeBg} shrink-0 mt-0.5">${h.badgeText}</span>`;
                 } else {
                     wBadgeHtml = '';
                     pBadgeHtml = '';
@@ -3762,7 +3952,7 @@ function createCourseCard(item, idx) {
                         <div class="p-2.5 rounded-lg border ${pBorder} ${pBg} ${h.type === 'header' ? headerBoxClass : ''} flex items-start space-x-2 text-xs ${pTextColor} leading-relaxed whitespace-pre-line break-words shadow-2xs">
                             ${pBadgeHtml}
                             <div class="flex-1 min-w-0">
-                                ${displayPdf ? displayPdf : '<span class="font-bold text-red-600">❌ (PDF 漏排此項)</span>'}
+                                ${displayPdf ? displayPdf : (d.status === 'gray' ? '<span class="text-slate-400 italic">(依排版規則免排)</span>' : '<span class="font-bold text-red-600">❌ (PDF 漏排此項)</span>')}
                                 ${d.desc && d.status === 'red' && d.pdf ? `<div class="mt-1 text-3xs text-red-600 font-normal">[${d.desc}]</div>` : ''}
                             </div>
                         </div>
@@ -3783,7 +3973,9 @@ function createCourseCard(item, idx) {
 
             let tagBadgeHtml = '';
             if (field.layoutTag) {
-                if (field.layoutTag === 'adopted-content') {
+                if (field.layoutTag === 'adopted-chapters') {
+                    tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-blue-100 text-blue-800 font-semibold">採大綱主章節</span>`;
+                } else if (field.layoutTag === 'adopted-content') {
                     tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-blue-100 text-blue-800 font-semibold">排版採用</span>`;
                 } else if (field.layoutTag === 'adopted-objective') {
                     tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-purple-100 text-purple-800 font-semibold">排版採用</span>`;
@@ -3816,7 +4008,9 @@ function createCourseCard(item, idx) {
         } else {
             let tagBadgeHtml = '';
             if (field.layoutTag) {
-                if (field.layoutTag === 'adopted-content') {
+                if (field.layoutTag === 'adopted-chapters') {
+                    tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-blue-100 text-blue-800 font-semibold">採大綱主章節</span>`;
+                } else if (field.layoutTag === 'adopted-content') {
                     tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-blue-100 text-blue-800 font-semibold">排版採用</span>`;
                 } else if (field.layoutTag === 'adopted-objective') {
                     tagBadgeHtml = `<span class="ml-1 text-3xs px-1.5 py-0.5 rounded font-mono bg-purple-100 text-purple-800 font-semibold">排版採用</span>`;
@@ -3895,7 +4089,28 @@ function createCourseCard(item, idx) {
     const enNameDisplay = item.nameEn || (item.pdfCourse && item.pdfCourse.course_name_en) || (item.wordCourse && item.wordCourse.course_name_en) || '(無英文課名/未排)';
 
     let layoutBadgeHtml = '';
-    if (item.layoutMode === 'content') {
+    const isChapterLayout = item.fields['課程內容'] && item.fields['課程內容'].isMainChapterOutline;
+    if (isChapterLayout) {
+        if (item.layoutMode === 'both') {
+            layoutBadgeHtml = `
+                <div class="flex items-center gap-1.5 pt-0.5">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-2xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <svg class="w-3 h-3 mr-1 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                        排版模式：同時排入「課程目標」與「大綱主章節」
+                    </span>
+                </div>
+            `;
+        } else {
+            layoutBadgeHtml = `
+                <div class="flex items-center gap-1.5 pt-0.5">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-2xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                        <svg class="w-3 h-3 mr-1 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path></svg>
+                        排版模式：以「課程內容 (大綱主章節)」排版
+                    </span>
+                </div>
+            `;
+        }
+    } else if (item.layoutMode === 'content') {
         layoutBadgeHtml = `
             <div class="flex items-center gap-1.5 pt-0.5">
                 <span class="inline-flex items-center px-2 py-0.5 rounded text-2xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
@@ -3925,7 +4140,9 @@ function createCourseCard(item, idx) {
     }
 
     let omittedLayoutNote = '';
-    if (item.layoutMode === 'content') {
+    if (isChapterLayout) {
+        omittedLayoutNote = `<p>• <strong>課程內容</strong>：本課程美編採<strong>「大綱主章節」</strong>精簡排版，主章節全部相符，Word 原稿之大綱細項/子章節依宣傳品版面限制免排入 PDF（視為正常）。</p>`;
+    } else if (item.layoutMode === 'content') {
         omittedLayoutNote = `<p>• <strong>課程目標 / 內容</strong>：本課程美編採<strong>「課程內容」</strong>排版，Word 原稿之「課程目標」依規則免排入 PDF，故已自動隱藏課程目標對比列（視為正常）。</p>`;
     } else if (item.layoutMode === 'objective') {
         omittedLayoutNote = `<p>• <strong>課程目標 / 內容</strong>：本課程美編採<strong>「課程目標」</strong>排版，Word 原稿之「課程內容」依規則免排入 PDF，故已自動隱藏課程內容對比列（視為正常）。</p>`;
