@@ -3758,7 +3758,7 @@ function renderCourseCards() {
                             <div class="flex items-start gap-1.5">
                                 <span class="font-bold text-rose-700 whitespace-nowrap">● 🚨 【PDF 重複排版】(${duplicatePdf.length} 門)：</span>
                                 <div class="text-slate-800 font-medium">
-                                    同一門課在 PDF 中出現多次：${duplicatePdf.map(m => `<span class="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-rose-100 text-rose-900 font-mono font-bold text-3xs border border-rose-300">${m.code} ${m.name}</span>${m.statusText ? `<span class="text-rose-700 font-semibold">${m.statusText.replace(/^【[^】]+】/, '')}</span>` : ''}`).join('； ')}
+                                    同一門課在 PDF 中出現多次：${duplicatePdf.map(m => `<span class="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-rose-100 text-rose-900 font-mono font-bold text-3xs border border-rose-300">${escapeHtml(m.code)} ${escapeHtml(m.name)}</span>${m.statusText ? `<span class="text-rose-700 font-semibold">${escapeHtml(m.statusText.replace(/^【[^】]+】/, ''))}</span>` : ''}`).join('； ')}
                                 </div>
                             </div>
                         ` : ''}
@@ -3766,7 +3766,7 @@ function renderCourseCards() {
                             <div class="flex items-start gap-1.5">
                                 <span class="font-bold text-red-700 whitespace-nowrap">● 【PDF 漏排此課程】(${missingPdf.length} 門)：</span>
                                 <div class="text-slate-800 font-medium">
-                                    Word 原稿中有列出，但 PDF 完全未排入：${missingPdf.map(m => `<span class="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-amber-100 text-amber-900 font-mono font-bold text-3xs border border-amber-300">${m.code} ${m.name}</span>`).join('、')}
+                                    Word 原稿中有列出，但 PDF 完全未排入：${missingPdf.map(m => `<span class="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-amber-100 text-amber-900 font-mono font-bold text-3xs border border-amber-300">${escapeHtml(m.code)} ${escapeHtml(m.name)}</span>`).join('、')}
                                 </div>
                             </div>
                         ` : ''}
@@ -3774,7 +3774,7 @@ function renderCourseCards() {
                             <div class="flex items-start gap-1.5">
                                 <span class="font-bold text-indigo-800 whitespace-nowrap">● 【Word 原稿無此課程】(${missingWord.length} 門)：</span>
                                 <div class="text-slate-800 font-medium">
-                                    PDF 排版有此課，但 Word 原稿中找不到：${missingWord.map(m => `<span class="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-indigo-100 text-indigo-900 font-mono font-bold text-3xs border border-indigo-200">${m.code} ${m.name}</span>`).join('、')}
+                                    PDF 排版有此課，但 Word 原稿中找不到：${missingWord.map(m => `<span class="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-indigo-100 text-indigo-900 font-mono font-bold text-3xs border border-indigo-200">${escapeHtml(m.code)} ${escapeHtml(m.name)}</span>`).join('、')}
                                 </div>
                             </div>
                         ` : ''}
@@ -3792,6 +3792,16 @@ function renderCourseCards() {
         const card = createCourseCard(item, idx);
         container.appendChild(card);
     });
+}
+
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 function createCourseCard(item, idx) {
@@ -3923,8 +3933,8 @@ function createCourseCard(item, idx) {
                     wBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-600 shrink-0 mt-0.5">●</span>`;
                     pBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold ${pBadgeBg} shrink-0 mt-0.5">●</span>`;
                 } else if ((h.type === 'number' || h.type === 'sub-number') && h.badgeText) {
-                    wBadgeHtml = `<span class="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-3xs font-mono font-bold bg-slate-100 text-slate-700 shrink-0 mt-0.5">${h.badgeText}</span>`;
-                    pBadgeHtml = `<span class="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-3xs font-mono font-bold ${pBadgeBg} shrink-0 mt-0.5">${h.badgeText}</span>`;
+                    wBadgeHtml = `<span class="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-3xs font-mono font-bold bg-slate-100 text-slate-700 shrink-0 mt-0.5">${escapeHtml(h.badgeText)}</span>`;
+                    pBadgeHtml = `<span class="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-3xs font-mono font-bold ${pBadgeBg} shrink-0 mt-0.5">${escapeHtml(h.badgeText)}</span>`;
                 } else {
                     wBadgeHtml = '';
                     pBadgeHtml = '';
@@ -3939,12 +3949,12 @@ function createCourseCard(item, idx) {
                 const headerBoxClass = h.type === 'header' ? 'font-semibold bg-slate-50/80' : '';
 
                 itemsHtml += `
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch ${rowIndentClass}">
+                    <div class="grid grid-cols-2 gap-3 items-stretch ${rowIndentClass}">
                         <!-- Word Item Box -->
                         <div class="p-2.5 rounded-lg border border-slate-200 ${h.type === 'header' ? headerBoxClass : 'bg-white'} flex items-start space-x-2 text-xs text-slate-800 leading-relaxed whitespace-pre-line break-words shadow-2xs">
                             ${wBadgeHtml}
                             <div class="flex-1 min-w-0">
-                                ${displayWord ? displayWord : '<span class="text-slate-400 italic">(Word 無此項)</span>'}
+                                ${displayWord ? escapeHtml(displayWord) : '<span class="text-slate-400 italic">(Word 無此項)</span>'}
                             </div>
                         </div>
 
@@ -3952,8 +3962,8 @@ function createCourseCard(item, idx) {
                         <div class="p-2.5 rounded-lg border ${pBorder} ${pBg} ${h.type === 'header' ? headerBoxClass : ''} flex items-start space-x-2 text-xs ${pTextColor} leading-relaxed whitespace-pre-line break-words shadow-2xs">
                             ${pBadgeHtml}
                             <div class="flex-1 min-w-0">
-                                ${displayPdf ? displayPdf : (d.status === 'gray' ? '<span class="text-slate-400 italic">(依排版規則免排)</span>' : '<span class="font-bold text-red-600">❌ (PDF 漏排此項)</span>')}
-                                ${d.desc && d.status === 'red' && d.pdf ? `<div class="mt-1 text-3xs text-red-600 font-normal">[${d.desc}]</div>` : ''}
+                                ${displayPdf ? escapeHtml(displayPdf) : (d.status === 'gray' ? '<span class="text-slate-400 italic">(依排版規則免排)</span>' : '<span class="font-bold text-red-600">❌ (PDF 漏排此項)</span>')}
+                                ${d.desc && d.status === 'red' && d.pdf ? `<div class="mt-1 text-3xs text-red-600 font-normal">[${escapeHtml(d.desc)}]</div>` : ''}
                             </div>
                         </div>
                     </div>
@@ -3989,7 +3999,7 @@ function createCourseCard(item, idx) {
             rowsHtml += `
                 <tr class="border-b border-slate-100 last:border-none ${rowBg}">
                     <td class="py-3 px-4 text-xs font-semibold text-slate-700 whitespace-nowrap align-top">
-                        <div class="font-bold text-slate-800 flex items-center flex-wrap gap-1">${field.label}${tagBadgeHtml}</div>
+                        <div class="font-bold text-slate-800 flex items-center flex-wrap gap-1">${escapeHtml(field.label)}${tagBadgeHtml}</div>
                         ${countBadgeHtml}
                     </td>
                     <td colspan="2" class="py-2.5 px-4 align-top">
@@ -4000,7 +4010,7 @@ function createCourseCard(item, idx) {
                     <td class="py-3 px-4 text-xs align-top">
                         <span class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium ${badgeStyle}">
                             <span class="light-dot ${dotStyle} mr-1.5"></span>
-                            ${field.desc}
+                            ${escapeHtml(field.desc)}
                         </span>
                     </td>
                 </tr>
@@ -4024,7 +4034,7 @@ function createCourseCard(item, idx) {
             rowsHtml += `
                 <tr class="border-b border-slate-100 last:border-none ${rowBg}">
                     <td class="py-3 px-4 text-xs font-semibold text-slate-700 whitespace-nowrap align-top">
-                        <div class="font-bold text-slate-800 flex items-center flex-wrap gap-1">${field.label}${tagBadgeHtml}</div>
+                        <div class="font-bold text-slate-800 flex items-center flex-wrap gap-1">${escapeHtml(field.label)}${tagBadgeHtml}</div>
                     </td>
                     <td class="py-3 px-4 text-xs text-slate-800 font-mono align-top break-words whitespace-pre-line leading-relaxed">
                         ${formatFieldValue(key, field.word, field.status === 'red')}
@@ -4035,7 +4045,7 @@ function createCourseCard(item, idx) {
                     <td class="py-3 px-4 text-xs align-top">
                         <span class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium ${badgeStyle}">
                             <span class="light-dot ${dotStyle} mr-1.5"></span>
-                            ${field.desc}
+                            ${escapeHtml(field.desc)}
                         </span>
                     </td>
                 </tr>
@@ -4085,8 +4095,8 @@ function createCourseCard(item, idx) {
         enBadgeText = enField.desc || '英文課名缺少';
     }
 
-    const zhNameDisplay = item.nameZh || item.name || '(未提供中文課名)';
-    const enNameDisplay = item.nameEn || (item.pdfCourse && item.pdfCourse.course_name_en) || (item.wordCourse && item.wordCourse.course_name_en) || '(無英文課名/未排)';
+    const zhNameDisplay = escapeHtml(item.nameZh || item.name || '(未提供中文課名)');
+    const enNameDisplay = escapeHtml(item.nameEn || (item.pdfCourse && item.pdfCourse.course_name_en) || (item.wordCourse && item.wordCourse.course_name_en) || '(無英文課名/未排)');
 
     let layoutBadgeHtml = '';
     const isChapterLayout = item.fields['課程內容'] && item.fields['課程內容'].isMainChapterOutline;
@@ -4206,7 +4216,7 @@ function createCourseCard(item, idx) {
                 <span class="mt-0.5 px-2.5 py-1.5 rounded-lg text-xs font-bold font-mono tracking-wide flex-shrink-0 ${
                     item.status === 'red' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'
                 }">
-                    ${item.code}
+                    ${escapeHtml(item.code)}
                 </span>
                 <div class="space-y-2 flex-1 min-w-0">
                     <!-- 中文課名與標籤 -->
@@ -4215,7 +4225,7 @@ function createCourseCard(item, idx) {
                         <h3 class="text-base font-bold text-slate-900 break-words">${zhNameDisplay}</h3>
                         <span class="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold ${zhBadgeClass}">
                             <span class="light-dot ${zhDotClass} mr-1"></span>
-                            ${zhBadgeText}
+                            ${escapeHtml(zhBadgeText)}
                         </span>
                     </div>
                     <!-- 英文課名與標籤 -->
@@ -4224,7 +4234,7 @@ function createCourseCard(item, idx) {
                         <p class="text-xs font-medium text-slate-600 font-mono break-words">${enNameDisplay}</p>
                         <span class="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold ${enBadgeClass}">
                             <span class="light-dot ${enDotClass} mr-1"></span>
-                            ${enBadgeText}
+                            ${escapeHtml(enBadgeText)}
                         </span>
                     </div>
                     <!-- 排版模式指示標籤 -->
@@ -4236,7 +4246,7 @@ function createCourseCard(item, idx) {
                 ${pdfPage ? `<span class="text-xs text-slate-400 font-medium">${pdfPage}</span>` : ''}
                 <span class="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold ${statusBadgeClass}">
                     ${statusIcon}
-                    ${item.statusText}
+                    ${escapeHtml(item.statusText)}
                 </span>
             </div>
         </div>
@@ -4264,10 +4274,11 @@ function createCourseCard(item, idx) {
 
 function formatFieldValue(field, val, isError) {
     if (!val) return '<span class="text-slate-300">-</span>';
+    const safeVal = escapeHtml(val);
     if (isError && (field === '時數' || field === '點數' || field === '費用' || field === '中文課名' || field === '英文課名' || field === '課程名稱' || field === '英文名稱' || field === '課程代碼')) {
-        return `<span class="diff-val-error">${val}</span>`;
+        return `<span class="diff-val-error">${safeVal}</span>`;
     }
-    return val;
+    return safeVal;
 }
 
 // ==========================================
