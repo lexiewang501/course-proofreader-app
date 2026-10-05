@@ -32,8 +32,8 @@ const LIST_FIELDS = new Set([
     '先修課程'
 ]);
 
-const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\b\d{1,2}\s+(?![小時天歲折元點門科題人個\d]|分鐘|年|月|日)|\b\d{1,2}-\d{1,3}(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘)|$)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天歲折元點門科題人個\d]|分鐘)|$)|[【\[]\d+[】\]]|[\uf06c\uf06e\uf075•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
-const MODULE_HEADER_PATTERN = /^(?:[\uf06c\uf06e\uf075•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼-]\s*)?(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+/i;
+const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\b\d{1,2}\s+(?![小時天歲折元點門科題人個\d]|分鐘|年|月|日)|\b\d{1,2}-\d{1,3}(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘)|$)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天歲折元點門科題人個\d]|分鐘)|$)|[【\[]\d+[】\]]|[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
+const MODULE_HEADER_PATTERN = /^(?:[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼-]\s*)?(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+/i;
 
 // Global Application State
 const state = {
@@ -1318,8 +1318,8 @@ function toCleanItemArray(val) {
 function cleanItemText(str) {
     if (!str) return '';
     return str
-        .replace(/^[\s\uf06c\uf06e\uf075•●\-\*※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼\d.、()（）]+/, '')
-        .replace(/^(?:Domain\s*\d+|[A-Za-z]\d+(?:\.\d+)*|[A-Za-z])[.、)）\s]+/i, '')
+        .replace(/^[\s\uF000-\uF0FF\u200B-\u200D\uFEFF•●\-\*※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼\d.、()（）]+/, '')
+        .replace(/^(?:Domain\s*\d+|[A-Za-z]\d+(?:\.\d+)*|[A-Za-z])[:：.、)）\s]+/i, '')
         .trim();
 }
 
@@ -1329,7 +1329,7 @@ function cleanItemText(str) {
  */
 function splitInlineBullets(text) {
     if (!text) return [];
-    const parts = text.split(/(?<=[^\s])\s+(?=(?:\d+[.、](?!\d)|[\uf06c\uf06e\uf075•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼])\s*)|(?<=[^\s])(?=[\uf06c\uf06e\uf075•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]\s*)/);
+    const parts = text.split(/(?<=[^\s])\s+(?=(?:\d+[.、](?!\d)|[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼])\s*)|(?<=[^\s])(?=[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]\s*)/);
     return parts.map(p => p.trim()).filter(Boolean);
 }
 
@@ -1339,7 +1339,7 @@ function splitInlineBullets(text) {
  */
 function splitOutlineItems(text) {
     if (!text) return [];
-    const parts = text.split(/(?=(?<=^|[\s\r\n])(?<!Top\s*|top\s*|OS\s*|os\s*|v\s*|V\s*|ver\s*|version\s*)\d{1,2}[.、](?=(?:\s+|[\u4e00-\u9fa5➔→•(（【\["'「『]))|(?<=^|[\s\r\n])\d{1,2}-\d{1,3}(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[\uf06c\uf06e\uf075•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
+    const parts = text.split(/(?=(?<=^|[\s\r\n])(?<!Top\s*|top\s*|OS\s*|os\s*|v\s*|V\s*|ver\s*|version\s*)\d{1,2}[.、](?=(?:\s+|[\u4e00-\u9fa5➔→•(（【\["'「『]))|(?<=^|[\s\r\n])\d{1,2}-\d{1,3}(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
     const res = [];
     let cur = '';
     for (const p of parts) {
@@ -2071,8 +2071,8 @@ function analyzeItemHierarchy(itemText, prevH, fieldLabel) {
     if (!itemText) return { level: 1, type: 'text', badgeText: '•', indent: '', text: '' };
     const raw = itemText.trim();
 
-    // 1. Explicit bullet dot (●, •, ※, ·, ‧, ・, -, *)
-    const bMatch = raw.match(/^([●•※\-\*·‧・▪])\s*(.*)$/);
+    // 1. Explicit bullet dot (●, •, ※, ·, ‧, ・, -, *, and PUA bullets)
+    const bMatch = raw.match(/^([●•※\-\*·‧・▪\uF000-\uF0FF])\s*(.*)$/);
     if (bMatch) {
         // Check if the bullet is followed by a multi-level number like - 1.1 or • 2-1
         const subNumInBullet = (bMatch[2] || '').match(/^(\d+(?:[.-]\d+)+)[.、．\s]*(.*)$/);
@@ -2194,7 +2194,7 @@ function getListBulletIdentity(item) {
     if (mNum) return 'num:' + parseInt(mNum[1], 10);
 
     // 3. Multi-level numbering: 1.1, 1.2, 2.1, 1-1, 1-2, 5-1
-    const mMulti = str.match(/^(?:[●•※\-\*·‧・▪]\s*)?(\d+(?:[.-]\d+)+)[.、．\s]?/);
+    const mMulti = str.match(/^(?:[●•※\-\*·‧・▪\uF000-\uF0FF]\s*)?(\d+(?:[.-]\d+)+)[.、．\s]?/);
     if (mMulti) return 'multi:' + mMulti[1].replace(/-/g, '.');
 
     // 4. Circled numbers: ①, ②, ❶
@@ -2218,10 +2218,10 @@ function getListBulletIdentity(item) {
 function isOutlineSubItem(raw) {
     if (!raw) return false;
     const str = raw.trim();
-    if (/^(?:[●•※\-\*·‧・▪]\s*)?\d+(?:-\d+)+/.test(str)) return true;
-    if (/^(?:[●•※\-\*·‧・▪]\s*)?\d+(?:\.\d+)+/.test(str)) return true;
+    if (/^(?:[●•※\-\*·‧・▪\uF000-\uF0FF]\s*)?\d+(?:-\d+)+/.test(str)) return true;
+    if (/^(?:[●•※\-\*·‧・▪\uF000-\uF0FF]\s*)?\d+(?:\.\d+)+/.test(str)) return true;
     if (/^[（(]\d+[)）]/.test(str)) return true;
-    if (/^[●•※\-\*·‧・▪]/.test(str)) return true;
+    if (/^[●•※\-\*·‧・▪\uF000-\uF0FF]/.test(str)) return true;
     return false;
 }
 
@@ -2286,6 +2286,7 @@ function alignOutlineWithChapters(wItems, pItems) {
                             word: wItem,
                             pdf: mainPair.pdf,
                             desc: mainPair.desc,
+                            diffHighlight: mainPair.diffHighlight,
                             hierarchy: analyzeItemHierarchy(wItem, null, '課程內容')
                         });
                     } else {
@@ -2598,7 +2599,8 @@ function alignListItems(wItems, pItems, fieldLabel) {
                 matchCount++;
                 hasYellow = true;
                 itemStatus = 'yellow';
-                itemDesc = '文字微差';
+                const diffSummary = describeTextDiff(w, p);
+                itemDesc = diffSummary ? `文字微差 (${diffSummary})` : '文字微差';
             } else {
                 hasRed = true;
                 itemStatus = 'red';
@@ -2614,12 +2616,15 @@ function alignListItems(wItems, pItems, fieldLabel) {
             itemDesc = 'PDF 多排此項目';
         }
 
+        const diffHighlight = (itemStatus === 'yellow' && w && p) ? highlightDiff(w, p) : null;
+
         details.push({
             index: idx + 1,
             status: itemStatus,
             word: w,
             pdf: p,
             desc: itemDesc,
+            diffHighlight,
             hierarchy: h
         });
     });
@@ -3021,7 +3026,15 @@ function compareSinglePair(w, p) {
         fields['中文課名'] = { label: '中文課名', word: wNameZh, pdf: pNameZh, status: 'green', desc: '中文課名完全相符' };
     } else if (calculateSimilarity(wZhNorm, pZhNorm) > 0.85 || wZhNorm.includes(pZhNorm) || pZhNorm.includes(wZhNorm) ||
                (wZhStrip && pZhStrip && (wZhStrip === pZhStrip || calculateSimilarity(wZhStrip, pZhStrip) > 0.80 || wZhStrip.includes(pZhStrip) || pZhStrip.includes(wZhStrip)))) {
-        fields['中文課名'] = { label: '中文課名', word: wNameZh, pdf: pNameZh, status: 'yellow', desc: '中文課名文字微差 (含括號補充說明)' };
+        const diffDesc = describeTextDiff(wNameZh, pNameZh);
+        fields['中文課名'] = {
+            label: '中文課名',
+            word: wNameZh,
+            pdf: pNameZh,
+            status: 'yellow',
+            desc: `中文課名文字微差 (${diffDesc})`,
+            diffHighlight: highlightDiff(wNameZh, pNameZh)
+        };
         hasYellow = true;
     } else {
         fields['中文課名'] = { label: '中文課名', word: wNameZh || '(無)', pdf: pNameZh || '(漏排)', status: 'red', desc: '中文課名不一致或錯字！' };
@@ -3048,7 +3061,15 @@ function compareSinglePair(w, p) {
         if (wEnNorm === pEnNorm) {
             fields['英文課名'] = { label: '英文課名', word: wNameEn, pdf: pNameEn, status: 'green', desc: '英文課名完全相符' };
         } else if (calculateSimilarity(wEnNorm, pEnNorm) > 0.85 || wEnNorm.includes(pEnNorm) || pEnNorm.includes(wEnNorm)) {
-            fields['英文課名'] = { label: '英文課名', word: wNameEn, pdf: pNameEn, status: 'yellow', desc: '英文課名微差 (單字大小寫或標點差異)' };
+            const diffDesc = describeTextDiff(wNameEn, pNameEn);
+            fields['英文課名'] = {
+                label: '英文課名',
+                word: wNameEn,
+                pdf: pNameEn,
+                status: 'yellow',
+                desc: `英文課名微差 (${diffDesc})`,
+                diffHighlight: highlightDiff(wNameEn, pNameEn)
+            };
             hasYellow = true;
         } else {
             fields['英文課名'] = {
@@ -3164,7 +3185,15 @@ function compareSinglePair(w, p) {
     if (wMat === pMat) {
         fields['教材'] = { label: '教材', word: w['教材'] || '-', pdf: p['教材'] || '-', status: 'green', desc: '教材相符' };
     } else if (wMat.includes(pMat) || pMat.includes(wMat)) {
-        fields['教材'] = { label: '教材', word: w['教材'] || '-', pdf: p['教材'] || '-', status: 'yellow', desc: '教材文字有修訂或簡寫' };
+        const diffDesc = describeTextDiff(w['教材'], p['教材']);
+        fields['教材'] = {
+            label: '教材',
+            word: w['教材'] || '-',
+            pdf: p['教材'] || '-',
+            status: 'yellow',
+            desc: `教材文字微差 (${diffDesc})`,
+            diffHighlight: highlightDiff(w['教材'], p['教材'])
+        };
         hasYellow = true;
     } else {
         fields['教材'] = { label: '教材', word: w['教材'] || '-', pdf: p['教材'] || '-', status: 'red', desc: '教材資料不一致' };
@@ -3396,7 +3425,8 @@ function compareSinglePair(w, p) {
                 : '推薦課程相符';
         } else if (maxSim > 0.75 || wFirstNorm.includes(pFirstNorm) || pFirstNorm.includes(wFirstNorm)) {
             recStatus = 'yellow';
-            recDesc = '推薦課程文字微差 (首門推薦課程大致相符)';
+            const diffDesc = describeTextDiff(wFirstRec, pFirstRec);
+            recDesc = `推薦課程文字微差 (${diffDesc})`;
             hasYellow = true;
         } else {
             recStatus = 'red';
@@ -3404,13 +3434,15 @@ function compareSinglePair(w, p) {
             hasRed = true;
         }
 
+        const recDiffHighlight = (recStatus === 'yellow') ? highlightDiff(wFirstRec, pFirstRec) : null;
         const recDetails = [
             {
                 index: 1,
                 word: wFirstRec + ' (首門推薦)',
                 pdf: pFirstRec,
                 status: recStatus,
-                desc: isMatch ? '首門推薦課程相符' : (recStatus === 'yellow' ? '文字微差' : '首門課程不符'),
+                desc: isMatch ? '首門推薦課程相符' : (recStatus === 'yellow' ? `文字微差 (${describeTextDiff(wFirstRec, pFirstRec)})` : '首門課程不符'),
+                diffHighlight: recDiffHighlight,
                 hierarchy: { level: 1, type: 'number', badgeText: '1', indent: '', cleanText: wFirstRec }
             }
         ];
@@ -3466,7 +3498,15 @@ function compareSinglePair(w, p) {
         } else if (wTNorm === pTNorm) {
             fields['適合對象'] = { label: '適合對象', word: wTargetStr, pdf: pTargetStr, status: 'green', desc: '適合對象相符' };
         } else if (calculateSimilarity(wTNorm, pTNorm) > 0.70 || wTNorm.includes(pTNorm) || pTNorm.includes(wTNorm)) {
-            fields['適合對象'] = { label: '適合對象', word: wTargetStr, pdf: pTargetStr, status: 'yellow', desc: '適合對象文字微差' };
+            const diffDesc = describeTextDiff(wTargetStr, pTargetStr);
+            fields['適合對象'] = {
+                label: '適合對象',
+                word: wTargetStr,
+                pdf: pTargetStr,
+                status: 'yellow',
+                desc: `適合對象文字微差 (${diffDesc})`,
+                diffHighlight: highlightDiff(wTargetStr, pTargetStr)
+            };
             hasYellow = true;
         } else {
             fields['適合對象'] = { label: '適合對象', word: wTargetStr || '(無)', pdf: pTargetStr || '(漏排)', status: 'red', desc: '適合對象不一致！' };
@@ -3506,7 +3546,15 @@ function compareSinglePair(w, p) {
         } else if (wPNorm === pPNorm) {
             fields['預備知識'] = { label: '預備知識', word: wPrereqStr, pdf: pPrereqStr, status: 'green', desc: '預備知識相符' };
         } else if (calculateSimilarity(wPNorm, pPNorm) > 0.70 || wPNorm.includes(pPNorm) || pPNorm.includes(wPNorm)) {
-            fields['預備知識'] = { label: '預備知識', word: wPrereqStr, pdf: pPrereqStr, status: 'yellow', desc: '預備知識文字微差' };
+            const diffDesc = describeTextDiff(wPrereqStr, pPrereqStr);
+            fields['預備知識'] = {
+                label: '預備知識',
+                word: wPrereqStr,
+                pdf: pPrereqStr,
+                status: 'yellow',
+                desc: `預備知識文字微差 (${diffDesc})`,
+                diffHighlight: highlightDiff(wPrereqStr, pPrereqStr)
+            };
             hasYellow = true;
         } else {
             fields['預備知識'] = { label: '預備知識', word: wPrereqStr || '(無)', pdf: pPrereqStr || '(漏排)', status: 'red', desc: '預備知識不一致！' };
@@ -3544,7 +3592,15 @@ function compareSinglePair(w, p) {
             if (wNorm === pNorm) {
                 fields['先修課程'] = { label: '先修課程', word: wPreStr, pdf: pPreStr, status: 'green', desc: '先修課程相符' };
             } else {
-                fields['先修課程'] = { label: '先修課程', word: wPreStr, pdf: pPreStr, status: 'yellow', desc: '先修課程文字微差' };
+                const diffDesc = describeTextDiff(wPreStr, pPreStr);
+                fields['先修課程'] = {
+                    label: '先修課程',
+                    word: wPreStr,
+                    pdf: pPreStr,
+                    status: 'yellow',
+                    desc: `先修課程文字微差 (${diffDesc})`,
+                    diffHighlight: highlightDiff(wPreStr, pPreStr)
+                };
                 hasYellow = true;
             }
         }
@@ -3585,20 +3641,23 @@ function compareSinglePair(w, p) {
                 word: wObjStr,
                 pdf: objTextToCompare,
                 status: 'yellow',
-                desc: yellowDesc + (layoutMode === 'both' ? '' : ' (本課採「課程目標」排版)')
+                desc: yellowDesc + (layoutMode === 'both' ? '' : ' (本課採「課程目標」排版)'),
+                diffHighlight: highlightDiff(wObjStr, objTextToCompare)
             };
             hasYellow = true;
         } else if (calculateSimilarity(wObjNorm, normPdfObj) > 0.70 ||
                    calculateSimilarity(normCleanWordObj, normCleanPdfObj) > 0.70 ||
                    wObjNorm.includes(normPdfObj) || normPdfObj.includes(wObjNorm) ||
                    normCleanWordObj.includes(normCleanPdfObj) || normCleanPdfObj.includes(normCleanWordObj)) {
+            const diffDesc = describeTextDiff(wObjStr, objTextToCompare);
             fields['課程目標'] = {
                 label: '課程目標',
                 layoutTag: 'adopted-objective',
                 word: wObjStr,
                 pdf: objTextToCompare,
                 status: 'yellow',
-                desc: '課程目標文字微調 (本課採「課程目標」排版)'
+                desc: `課程目標文字微調 (${diffDesc})` + (layoutMode === 'both' ? '' : ' (本課採「課程目標」排版)'),
+                diffHighlight: highlightDiff(wObjStr, objTextToCompare)
             };
             hasYellow = true;
         } else {
@@ -3961,8 +4020,16 @@ function createCourseCard(item, idx) {
                 }
 
                 // Strip leading duplicate bullets if bullet badge is already shown
-                const displayWord = (d.word && h.type === 'bullet') ? d.word.replace(/^[●•※\-\*·‧・▪]\s*/, '') : d.word;
-                const displayPdf = (d.pdf && h.type === 'bullet') ? d.pdf.replace(/^[●•※\-\*·‧・▪]\s*/, '') : d.pdf;
+                const displayWord = (d.word && h.type === 'bullet') ? d.word.replace(/^[●•※\-\*·‧・▪\uF000-\uF0FF]\s*/, '') : d.word;
+                const displayPdf = (d.pdf && h.type === 'bullet') ? d.pdf.replace(/^[●•※\-\*·‧・▪\uF000-\uF0FF]\s*/, '') : d.pdf;
+
+                let wordContentHtml = displayWord ? escapeHtml(displayWord) : '<span class="text-slate-400 italic">(Word 無此項)</span>';
+                let pdfContentHtml = displayPdf ? escapeHtml(displayPdf) : (d.status === 'gray' ? '<span class="text-slate-400 italic">(依排版規則免排)</span>' : '<span class="font-bold text-red-600">❌ (PDF 漏排此項)</span>');
+
+                if (d.status === 'yellow' && d.diffHighlight) {
+                    if (d.word && d.diffHighlight.wHtml) wordContentHtml = d.diffHighlight.wHtml;
+                    if (d.pdf && d.diffHighlight.pHtml) pdfContentHtml = d.diffHighlight.pHtml;
+                }
 
                 // Hierarchy row indentation and header styling
                 const rowIndentClass = h.level >= 2 ? 'md:ml-6 ml-3 pl-2.5 border-l-2 border-indigo-200/70' : '';
@@ -3974,7 +4041,7 @@ function createCourseCard(item, idx) {
                         <div class="p-2.5 rounded-lg border border-slate-200 ${h.type === 'header' ? headerBoxClass : 'bg-white'} flex items-start space-x-2 text-xs text-slate-800 leading-relaxed whitespace-pre-line break-words shadow-2xs">
                             ${wBadgeHtml}
                             <div class="flex-1 min-w-0">
-                                ${displayWord ? escapeHtml(displayWord) : '<span class="text-slate-400 italic">(Word 無此項)</span>'}
+                                ${wordContentHtml}
                             </div>
                         </div>
 
@@ -3982,8 +4049,9 @@ function createCourseCard(item, idx) {
                         <div class="p-2.5 rounded-lg border ${pBorder} ${pBg} ${h.type === 'header' ? headerBoxClass : ''} flex items-start space-x-2 text-xs ${pTextColor} leading-relaxed whitespace-pre-line break-words shadow-2xs">
                             ${pBadgeHtml}
                             <div class="flex-1 min-w-0">
-                                ${displayPdf ? escapeHtml(displayPdf) : (d.status === 'gray' ? '<span class="text-slate-400 italic">(依排版規則免排)</span>' : '<span class="font-bold text-red-600">❌ (PDF 漏排此項)</span>')}
+                                ${pdfContentHtml}
                                 ${d.desc && d.status === 'red' && d.pdf ? `<div class="mt-1 text-3xs text-red-600 font-normal">[${escapeHtml(d.desc)}]</div>` : ''}
+                                ${d.desc && d.status === 'yellow' && d.pdf ? `<div class="mt-1 text-3xs text-amber-700 font-semibold">[${escapeHtml(d.desc)}]</div>` : ''}
                             </div>
                         </div>
                     </div>
@@ -4057,10 +4125,10 @@ function createCourseCard(item, idx) {
                         <div class="font-bold text-slate-800 flex items-center flex-wrap gap-1">${escapeHtml(field.label)}${tagBadgeHtml}</div>
                     </td>
                     <td class="py-3 px-4 text-xs text-slate-800 font-mono align-top break-words whitespace-pre-line leading-relaxed">
-                        ${formatFieldValue(key, field.word, field.status === 'red')}
+                        ${(field.status === 'yellow' && field.diffHighlight && field.diffHighlight.wHtml) ? field.diffHighlight.wHtml : formatFieldValue(key, field.word, field.status === 'red')}
                     </td>
                     <td class="py-3 px-4 text-xs text-slate-800 font-mono align-top break-words whitespace-pre-line leading-relaxed">
-                        ${formatFieldValue(key, field.pdf, field.status === 'red')}
+                        ${(field.status === 'yellow' && field.diffHighlight && field.diffHighlight.pHtml) ? field.diffHighlight.pHtml : formatFieldValue(key, field.pdf, field.status === 'red')}
                     </td>
                     <td class="py-3 px-4 text-xs align-top">
                         <span class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium ${badgeStyle}">
@@ -4522,7 +4590,8 @@ function normalizeText(str) {
         .replace(/&amp;/gi, '&')
         .replace(/&lt;/gi, '<')
         .replace(/&gt;/gi, '>')
-        .replace(/[\s\r\n\t\u3000]+/g, '')
+        .replace(/[\s\r\n\t\u3000\u200B-\u200D\uFEFF]+/g, '')
+        .replace(/[\uF000-\uF0FF]/g, '')
         .replace(/[，,。.:：;；()（）「」『』"'\-–—－／/＋+\\®™©&~～]/g, '')
         .toLowerCase();
 }
@@ -4544,6 +4613,205 @@ function calculateSimilarity(s1, s2) {
         }
     }
     return 1 - (d[len1][len2] / maxLen);
+}
+
+/**
+ * Summarizes the exact textual difference between Word and PDF content for yellow diff warnings.
+ */
+function describeTextDiff(wText, pText) {
+    if (!wText || !pText) return '文字微差';
+    const w = String(wText).trim();
+    const p = String(pText).trim();
+    if (w === p) return '文字相符';
+
+    // Strip common leading bullets/numbers for clean comparison
+    const cleanW = w.replace(/^[\s\uF000-\uF0FF\u200B-\u200D\uFEFF•●\-\*※·‧・◆▪＊★☆\d.、()（）]+/, '').trim();
+    const cleanP = p.replace(/^[\s\uF000-\uF0FF\u200B-\u200D\uFEFF•●\-\*※·‧・◆▪＊★☆\d.、()（）]+/, '').trim();
+
+    if (cleanW && cleanP) {
+        if (cleanW.startsWith(cleanP) && cleanW.length > cleanP.length) {
+            const extra = cleanW.slice(cleanP.length).replace(/^[\s\-_/：:，,、]+/g, '').trim();
+            if (extra) return `PDF 簡寫未排「${extra.length > 18 ? extra.slice(0, 16) + '...' : extra}」`;
+        }
+        if (cleanP.startsWith(cleanW) && cleanP.length > cleanW.length) {
+            const extra = cleanP.slice(cleanW.length).replace(/^[\s\-_/：:，,、]+/g, '').trim();
+            if (extra) return `PDF 多排「${extra.length > 18 ? extra.slice(0, 16) + '...' : extra}」`;
+        }
+        if (cleanW.endsWith(cleanP) && cleanW.length > cleanP.length) {
+            const extra = cleanW.slice(0, cleanW.length - cleanP.length).replace(/[\s\-_/：:，,、]+$/g, '').trim();
+            if (extra) return `PDF 簡寫未排前段「${extra.length > 18 ? extra.slice(0, 16) + '...' : extra}」`;
+        }
+        if (cleanP.endsWith(cleanW) && cleanP.length > cleanW.length) {
+            const extra = cleanP.slice(0, cleanP.length - cleanW.length).replace(/[\s\-_/：:，,、]+$/g, '').trim();
+            if (extra) return `PDF 多排前段「${extra.length > 18 ? extra.slice(0, 16) + '...' : extra}」`;
+        }
+    }
+
+    const normPunct = c => {
+        if (!c) return '';
+        return c
+            .replace(/[（(]/g, '(')
+            .replace(/[）)]/g, ')')
+            .replace(/[：:]/g, ':')
+            .replace(/[，,]/g, ',')
+            .replace(/[。.]/g, '.')
+            .replace(/[／/]/g, '/')
+            .replace(/[＋+]/g, '+')
+            .replace(/[–—－-]/g, '-')
+            .replace(/[~～]/g, '~')
+            .toLowerCase();
+    };
+
+    const tokenize = s => s.match(/[\u4e00-\u9fa5]|[a-zA-Z0-9]+|[^\s\w\u4e00-\u9fa5]/g) || [];
+    const tW = tokenize(w);
+    const tP = tokenize(p);
+
+    const m = tW.length, n = tP.length;
+    if (m === 0 || n === 0 || m > 600 || n > 600) return '用字微差';
+
+    // LCS
+    const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            if (normPunct(tW[i - 1]) === normPunct(tP[j - 1])) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+            }
+        }
+    }
+
+    let i = m, j = n;
+    const diffW = [];
+    const diffP = [];
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && normPunct(tW[i - 1]) === normPunct(tP[j - 1])) {
+            i--;
+            j--;
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+            diffP.unshift(tP[j - 1]);
+            j--;
+        } else if (i > 0 && (j === 0 || dp[i][j - 1] < dp[i - 1][j])) {
+            diffW.unshift(tW[i - 1]);
+            i--;
+        }
+    }
+
+    const isPunctOrPua = t => /^[\s\uF000-\uF0FF\u200B-\u200D\uFEFF•●\-\*※·‧・◆▪＊★☆，,。.:：;；()（）「」『』"'\-–—－／/＋+\\®™©&~～]+$/.test(t);
+    const meaningfulW = diffW.filter(t => !isPunctOrPua(t)).join('');
+    const meaningfulP = diffP.filter(t => !isPunctOrPua(t)).join('');
+
+    if (!meaningfulW && !meaningfulP) {
+        return '排版標點或空格微差';
+    }
+    if (meaningfulW && !meaningfulP) {
+        return `PDF 未排「${meaningfulW.length > 18 ? meaningfulW.slice(0, 16) + '...' : meaningfulW}」`;
+    }
+    if (!meaningfulW && meaningfulP) {
+        return `PDF 多排「${meaningfulP.length > 18 ? meaningfulP.slice(0, 16) + '...' : meaningfulP}」`;
+    }
+    return `Word「${meaningfulW.length > 10 ? meaningfulW.slice(0, 9) + '...' : meaningfulW}」⇄ PDF「${meaningfulP.length > 10 ? meaningfulP.slice(0, 9) + '...' : meaningfulP}」`;
+}
+
+/**
+ * Highlights exact token differences between Word and PDF text using inline warning badges.
+ */
+function highlightDiff(wText, pText) {
+    if (!wText || !pText) {
+        return { wHtml: escapeHtml(wText), pHtml: escapeHtml(pText) };
+    }
+    const w = String(wText);
+    const p = String(pText);
+
+    const normPunct = c => {
+        if (!c) return '';
+        return c
+            .replace(/[（(]/g, '(')
+            .replace(/[）)]/g, ')')
+            .replace(/[：:]/g, ':')
+            .replace(/[，,]/g, ',')
+            .replace(/[。.]/g, '.')
+            .replace(/[／/]/g, '/')
+            .replace(/[＋+]/g, '+')
+            .replace(/[–—－-]/g, '-')
+            .replace(/[~～]/g, '~')
+            .toLowerCase();
+    };
+
+    const tokenize = s => s.match(/[\u4e00-\u9fa5]|[a-zA-Z0-9]+|\s+|[^\s\w\u4e00-\u9fa5]/g) || [];
+    const tW = tokenize(w);
+    const tP = tokenize(p);
+
+    const m = tW.length, n = tP.length;
+    if (m === 0 || n === 0 || m > 600 || n > 600) {
+        return { wHtml: escapeHtml(w), pHtml: escapeHtml(p) };
+    }
+
+    const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            if (normPunct(tW[i - 1]) === normPunct(tP[j - 1])) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+            }
+        }
+    }
+
+    let i = m, j = n;
+    const wMatched = new Uint8Array(m);
+    const pMatched = new Uint8Array(n);
+
+    while (i > 0 && j > 0) {
+        if (normPunct(tW[i - 1]) === normPunct(tP[j - 1])) {
+            wMatched[i - 1] = 1;
+            pMatched[j - 1] = 1;
+            i--;
+            j--;
+        } else if (dp[i][j - 1] >= dp[i - 1][j]) {
+            j--;
+        } else {
+            i--;
+        }
+    }
+
+    const renderTokens = (tokens, matched) => {
+        let out = '';
+        let inDiff = false;
+        let diffBuffer = '';
+
+        for (let k = 0; k < tokens.length; k++) {
+            const tok = tokens[k];
+            const isWs = /^[\s\u200B-\u200D\uFEFF]+$/.test(tok);
+            const isPua = /^[\uF000-\uF0FF•●\-\*※·‧・◆▪＊★☆]+$/.test(tok);
+            const isMatch = matched[k] || isWs || isPua;
+
+            if (!isMatch) {
+                if (!inDiff) {
+                    inDiff = true;
+                    diffBuffer = tok;
+                } else {
+                    diffBuffer += tok;
+                }
+            } else {
+                if (inDiff) {
+                    out += `<span class="diff-val-warning">${escapeHtml(diffBuffer)}</span>`;
+                    inDiff = false;
+                    diffBuffer = '';
+                }
+                out += escapeHtml(tok);
+            }
+        }
+        if (inDiff) {
+            out += `<span class="diff-val-warning">${escapeHtml(diffBuffer)}</span>`;
+        }
+        return out;
+    };
+
+    return {
+        wHtml: renderTokens(tW, wMatched),
+        pHtml: renderTokens(tP, pMatched)
+    };
 }
 
 function showToast(message, isError = false) {

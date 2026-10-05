@@ -8,7 +8,7 @@ global.DOMParser = function() { return { parseFromString: (str) => parseXmlToDoc
 global.document = { addEventListener: () => {}, getElementById: () => ({ addEventListener: () => {}, classList: { add: () => {}, remove: () => {} }, innerHTML: '', textContent: '', appendChild: () => {}, scrollIntoView: () => {} }), querySelectorAll: () => [], createElement: (tag) => ({ tagName: tag, className: '', innerHTML: '', appendChild: () => {}, classList: { add: () => {}, remove: () => {} } }) };
 global.window = {};
 global.pdfjsLib = require(path.join(workspaceDir, 'lib/pdf.min.js'));
-global.pdfjsLib.GlobalWorkerOptions.workerSrc = './lib/pdf.worker.js';
+global.pdfjsLib.GlobalWorkerOptions.workerSrc = path.join(workspaceDir, 'lib/pdf.worker.js');
 global.JSZip = require(path.join(workspaceDir, 'lib/jszip.min.js'));
 
 const appCode = fs.readFileSync(path.join(workspaceDir, 'app.js'), 'utf8');
