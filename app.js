@@ -471,15 +471,20 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
             // Line has matching dominant large title font (including English continuation words like TensorFlow)
             if (maxZhH >= 12 && l.lineMaxH >= maxZhH - 2.5) {
                 // GUARD: If this line has NO Chinese characters and contains English words:
-                // Check if this line is actually an English continuation of the Chinese title (e.g. "...使用 Keras 與" -> "TensorFlow")
+                // Check if this line is an English continuation or English prefix of the Chinese title
                 if (!/[\u4e00-\u9fa5]/.test(l.lineText) && /[A-Za-z]{2,}/.test(l.lineText)) {
                     const prevZh = zhLines.length > 0 ? zhLines[zhLines.length - 1] : null;
                     const prevEndsWithConnector = prevZh && /[與和或及同跟、，,－\-\/（(：:]$/.test(prevZh.trim());
                     const nextLineIsEnSubtitle = candidateLines.some(other => other.y < l.y && !/[\u4e00-\u9fa5]/.test(other.lineText) && /[A-Za-z]{3,}/.test(other.lineText));
                     const isShortEnglishTerm = l.lineText.trim().split(/\s+/).length <= 3 && l.lineText.trim().length <= 30;
 
+                    const nextZhLine = candidateLines.find(other => other.y < l.y && (l.y - other.y) <= 25 && /[\u4e00-\u9fa5]/.test(other.lineText) && Math.abs(other.lineMaxH - l.lineMaxH) <= 2);
+                    const isPrefixOfZhTitle = nextZhLine && (nextLineIsEnSubtitle || l.lineText.trim().endsWith('-') || l.lineText.trim().endsWith('－') || nextZhLine.lineText.trim().startsWith('認證') || l.lineMaxH >= maxZhH - 1);
+
                     if (prevZh && (prevEndsWithConnector || (isShortEnglishTerm && nextLineIsEnSubtitle && l.lineMaxH >= maxZhH - 1))) {
                         // Accept as continuation of Chinese title (e.g. TensorFlow in "使用 Keras 與 TensorFlow")
+                    } else if (isPrefixOfZhTitle) {
+                        // Accept as prefix line of Chinese title (e.g. "Red Hat Certified Specialist in Enterprise Linux" above "認證Red Hat服務管理與自動化")
                     } else {
                         continue;
                     }
