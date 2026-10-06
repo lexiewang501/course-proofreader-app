@@ -633,6 +633,61 @@ function getXmlAttr(node, name) {
 }
 
 /**
+ * Formats a list sequence number according to Word's numFmt specification.
+ * Supports: decimal, upperLetter, lowerLetter, upperRoman, lowerRoman,
+ * ideographTraditional, taiwaneseCounting, decimalZero, etc.
+ */
+function formatNumberByFmt(n, numFmt) {
+    if (numFmt === 'upperLetter') {
+        let s = '';
+        let num = n;
+        while (num > 0) {
+            const rem = (num - 1) % 26;
+            s = String.fromCharCode(65 + rem) + s;
+            num = Math.floor((num - 1) / 26);
+        }
+        return s || String(n);
+    }
+    if (numFmt === 'lowerLetter') {
+        let s = '';
+        let num = n;
+        while (num > 0) {
+            const rem = (num - 1) % 26;
+            s = String.fromCharCode(97 + rem) + s;
+            num = Math.floor((num - 1) / 26);
+        }
+        return s || String(n);
+    }
+    if (numFmt === 'upperRoman' || numFmt === 'lowerRoman') {
+        const romanMap = [
+            [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+            [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+            [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']
+        ];
+        let r = '';
+        let val = n;
+        for (const [v, sym] of romanMap) {
+            while (val >= v) {
+                r += sym;
+                val -= v;
+            }
+        }
+        return numFmt === 'lowerRoman' ? (r.toLowerCase() || String(n)) : (r || String(n));
+    }
+    if (numFmt === 'ideographTraditional' || numFmt === 'taiwaneseCounting') {
+        const zhNums = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+        if (n <= 10) return zhNums[n] || String(n);
+        if (n < 20) return '十' + (zhNums[n - 10] || '');
+        if (n === 20) return '二十';
+        return String(n);
+    }
+    if (numFmt === 'decimalZero') {
+        return n < 10 ? '0' + n : String(n);
+    }
+    return String(n);
+}
+
+/**
  * Builds numbering map from Word's word/numbering.xml
  * Maps numId -> { [ilvl]: { start, numFmt, lvlText } }
  */
@@ -669,7 +724,21 @@ function buildNumberingMap(numberingDoc) {
         const absNode = num.getElementsByTagName('w:abstractNumId')[0];
         const absId = absNode ? (getXmlAttr(absNode, 'w:val') || getXmlAttr(absNode, 'val')) : null;
         if (absId && abstractNums[absId]) {
-            numMap[numId] = abstractNums[absId];
+            const cloned = {};
+            for (const [lvl, info] of Object.entries(abstractNums[absId])) {
+                cloned[lvl] = { ...info };
+            }
+            const overrides = num.getElementsByTagName('w:lvlOverride');
+            for (let oi = 0; oi < overrides.length; oi++) {
+                const ov = overrides[oi];
+                const ilvl = getXmlAttr(ov, 'w:ilvl') || getXmlAttr(ov, 'ilvl') || '0';
+                const startOv = ov.getElementsByTagName('w:startOverride')[0];
+                if (startOv && cloned[ilvl]) {
+                    const startVal = parseInt(getXmlAttr(startOv, 'w:val') || getXmlAttr(startOv, 'val') || '1', 10);
+                    cloned[ilvl].start = startVal;
+                }
+            }
+            numMap[numId] = cloned;
         }
     }
     return numMap;
@@ -776,6 +845,7 @@ async function parseDocx(buffer) {
 
         const trList = tbl.getElementsByTagName('w:tr');
         const rows = [];
+        const counters = {};
 
         for (let r = 0; r < trList.length; r++) {
             const tr = trList[r];
@@ -787,7 +857,6 @@ async function parseDocx(buffer) {
                 // Extract clean text, ignoring any text inside strikethrough <w:strike> or <w:dstrike>
                 const pList = tc.getElementsByTagName('w:p');
                 const paragraphs = [];
-                const counters = {};
 
                 for (let pi = 0; pi < pList.length; pi++) {
                     const p = pList[pi];
@@ -828,17 +897,22 @@ async function parseDocx(buffer) {
                             if (lvlInfo) {
                                 if (lvlInfo.numFmt === 'bullet') {
                                     prefix = (lvlInfo.lvlText || '•') + ' ';
-                                } else if (lvlInfo.numFmt === 'ideographTraditional') {
-                                    const zhNums = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
-                                    prefix = (zhNums[n] || n) + '、 ';
+                                } else if (lvlInfo.numFmt === 'ideographTraditional' || lvlInfo.numFmt === 'taiwaneseCounting') {
+                                    const zh = formatNumberByFmt(n, lvlInfo.numFmt);
+                                    prefix = zh + '、 ';
                                 } else {
+                                    const fmtStr = formatNumberByFmt(n, lvlInfo.numFmt);
                                     let t = lvlInfo.lvlText || `%${lvl + 1}.`;
                                     t = t.replace(/%([1-9])/g, (_, p1) => {
                                         const targetLvl = parseInt(p1, 10) - 1;
-                                        if (targetLvl === lvl) return n;
-                                        if (counters[numId][targetLvl] !== undefined) return counters[numId][targetLvl];
+                                        if (targetLvl === lvl) return fmtStr;
+                                        if (counters[numId][targetLvl] !== undefined) {
+                                            const targetFmt = numMap[numId] && numMap[numId][targetLvl] ? numMap[numId][targetLvl].numFmt : 'decimal';
+                                            return formatNumberByFmt(counters[numId][targetLvl], targetFmt);
+                                        }
                                         const tStart = numMap[numId] && numMap[numId][targetLvl] ? numMap[numId][targetLvl].start : 1;
-                                        return tStart;
+                                        const tFmt = numMap[numId] && numMap[numId][targetLvl] ? numMap[numId][targetLvl].numFmt : 'decimal';
+                                        return formatNumberByFmt(tStart, tFmt);
                                     });
                                     if (!/[.、\s]$/.test(t)) t += ' ';
                                     else if (!t.endsWith(' ')) t += ' ';

@@ -13,6 +13,7 @@ global.JSZip = require(path.join(workspaceDir, 'lib/jszip.min.js'));
 
 const appCode = fs.readFileSync(path.join(workspaceDir, 'app.js'), 'utf8');
 eval(appCode);
+global.pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.js';
 
 async function run() {
     const exampleDir = path.join(workspaceDir, '課程範例');
