@@ -1575,50 +1575,41 @@ function extractNotesFromPdfSection(secItems) {
 function getColumnSplits(secItems) {
     if (!secItems || secItems.length === 0) return [];
 
-    // 1. Direct whitespace gutter search between 200 and 380.
-    // In dual-column layouts on flyers, the left and right columns are separated by an empty vertical gutter.
-    // If a clear gutter of width >= 16 exists, its center is the true column split boundary.
+    // 1. Direct whitespace gutter search between 180 and 480.
+    // In multi-column layouts on flyers (2 or 3 columns), columns are separated by empty vertical gutters.
+    // All clear gutters of width >= 16 with text on both sides are identified as column split boundaries.
     const intervals = secItems.map(it => {
         const charWidth = /[\u4e00-\u9fa5]/.test(it.str) ? 10 : 6;
         const w = it.w || Math.max(it.str.length * charWidth, 10);
         return { start: it.x, end: it.x + w };
     });
 
-    let bestGutterStart = -1, bestGutterWidth = 0;
-    let inGutter = false, currentStart = 0;
-    for (let testX = 200; testX <= 380; testX += 2) {
+    const gutters = [];
+    let inG = false, gStart = 0;
+    for (let testX = 180; testX <= 480; testX += 2) {
         const hasText = intervals.some(inv => testX >= inv.start && testX <= inv.end);
         if (!hasText) {
-            if (!inGutter) {
-                inGutter = true;
-                currentStart = testX;
+            if (!inG) {
+                inG = true;
+                gStart = testX;
             }
         } else {
-            if (inGutter) {
-                inGutter = false;
-                const width = testX - currentStart;
-                if (width > bestGutterWidth) {
-                    bestGutterWidth = width;
-                    bestGutterStart = currentStart;
+            if (inG) {
+                inG = false;
+                const width = testX - gStart;
+                if (width >= 16) {
+                    const splitX = Math.round((gStart + testX) / 2);
+                    const hasLeftText = secItems.some(it => it.x < gStart);
+                    const hasRightText = secItems.some(it => it.x >= testX);
+                    if (hasLeftText && hasRightText) {
+                        gutters.push(splitX);
+                    }
                 }
             }
         }
     }
-    if (inGutter) {
-        const width = 380 - currentStart;
-        if (width > bestGutterWidth) {
-            bestGutterWidth = width;
-            bestGutterStart = currentStart;
-        }
-    }
-
-    if (bestGutterWidth >= 16) {
-        const splitX = Math.round(bestGutterStart + bestGutterWidth / 2);
-        const hasLeftText = secItems.some(it => it.x < splitX);
-        const hasRightText = secItems.some(it => it.x >= splitX);
-        if (hasLeftText && hasRightText) {
-            return [splitX];
-        }
+    if (gutters.length > 0) {
+        return gutters;
     }
 
     // 2. Identify true bullet / item markers at the start of a column/line
@@ -1893,7 +1884,7 @@ function sortListItems(items) {
     const nums = numbered.map(x => x.num).filter(n => n !== null);
     if (nums.length === 0) return items;
 
-    if (nums.length < items.length * 0.4) return items;
+    if (nums.length < items.length * 0.25 && nums.length < 3) return items;
 
     // Check for duplicate numbers (e.g. multiple "1.", "2." indicating nested/domain lists)
     const uniqueNums = new Set(nums);
