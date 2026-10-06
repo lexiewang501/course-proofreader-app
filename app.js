@@ -494,6 +494,23 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
                 if (l.y < minZhY) minZhY = l.y;
             }
         }
+    } else {
+        // Pure English course title in header banner (e.g. AWS, Cisco certifications where Chinese title is in English)
+        const enCandidates = candidateLines.filter(l => !/[\u4e00-\u9fa5]/.test(l.lineText) && /[A-Za-z]{2,}/.test(l.lineText) && l.lineText !== code);
+        if (enCandidates.length > 0) {
+            const maxEnH = Math.max(...enCandidates.map(l => l.lineMaxH));
+            const dominantLines = enCandidates.filter(l => l.lineMaxH >= maxEnH - 2.5);
+            const seenNorms = new Set();
+            for (const l of dominantLines) {
+                const norm = normalizeText(l.lineText);
+                if (!seenNorms.has(norm)) {
+                    seenNorms.add(norm);
+                    zhLines.push(l.lineText);
+                    if (l.y > maxZhY) maxZhY = l.y;
+                    if (l.y < minZhY) minZhY = l.y;
+                }
+            }
+        }
     }
 
     // Select course code: prefer code badge located near title / metadata
@@ -538,6 +555,32 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
         enTitle = enTitle.replace(new RegExp(`^${code}(?:[：:\\s\\-]+|$)`, 'i'), '').trim();
     }
 
+    // Deduplicate repeated identical halves (e.g. "AWS Technical Essentials AWS Technical Essentials")
+    if (enTitle) {
+        const words = enTitle.trim().split(/\s+/);
+        if (words.length >= 2 && words.length % 2 === 0) {
+            const half = words.length / 2;
+            const firstHalf = words.slice(0, half).join(' ');
+            const secondHalf = words.slice(half).join(' ');
+            if (firstHalf.toLowerCase() === secondHalf.toLowerCase()) {
+                if (!zhTitle) zhTitle = firstHalf;
+                enTitle = firstHalf;
+            }
+        }
+    }
+
+    if (zhTitle) {
+        const words = zhTitle.trim().split(/\s+/);
+        if (words.length >= 2 && words.length % 2 === 0) {
+            const half = words.length / 2;
+            const firstHalf = words.slice(0, half).join(' ');
+            const secondHalf = words.slice(half).join(' ');
+            if (firstHalf.toLowerCase() === secondHalf.toLowerCase()) {
+                zhTitle = firstHalf;
+            }
+        }
+    }
+
     if (!enTitle) {
         const parenMatch = zhTitle.match(/[(（]([^)）\u4e00-\u9fa5]*[A-Za-z]{2,}[^)）\u4e00-\u9fa5]*)[)）]/);
         if (parenMatch) {
@@ -548,6 +591,9 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
                 enTitle = inside;
                 zhTitle = zhTitle.replace(parenMatch[0], ' ').trim();
             }
+        } else if (zhTitle && !/[\u4e00-\u9fa5]/.test(zhTitle)) {
+            // Pure English course: the title serves as both primary course name and English course name!
+            enTitle = zhTitle;
         }
     }
 
@@ -3133,8 +3179,12 @@ function compareSinglePair(w, p) {
         fields['中文課名'] = { label: '中文課名', word: '(無)', pdf: '(無)', status: 'green', desc: '雙方皆無中文課名' };
     } else if (wZhNorm === pZhNorm) {
         fields['中文課名'] = { label: '中文課名', word: wNameZh, pdf: pNameZh, status: 'green', desc: '中文課名完全相符' };
-    } else if (calculateSimilarity(wZhNorm, pZhNorm) > 0.85 || wZhNorm.includes(pZhNorm) || pZhNorm.includes(wZhNorm) ||
-               (wZhStrip && pZhStrip && (wZhStrip === pZhStrip || calculateSimilarity(wZhStrip, pZhStrip) > 0.80 || wZhStrip.includes(pZhStrip) || pZhStrip.includes(wZhStrip)))) {
+    } else if (wZhNorm && pZhNorm && (calculateSimilarity(wZhNorm, pZhNorm) > 0.85 || 
+               (pZhNorm.length >= 2 && wZhNorm.includes(pZhNorm)) || 
+               (wZhNorm.length >= 2 && pZhNorm.includes(wZhNorm)) ||
+               (wZhStrip && pZhStrip && (wZhStrip === pZhStrip || calculateSimilarity(wZhStrip, pZhStrip) > 0.80 || 
+                (pZhStrip.length >= 2 && wZhStrip.includes(pZhStrip)) || 
+                (wZhStrip.length >= 2 && pZhStrip.includes(wZhStrip)))))) {
         const diffDesc = describeTextDiff(wNameZh, pNameZh);
         fields['中文課名'] = {
             label: '中文課名',
@@ -3169,7 +3219,9 @@ function compareSinglePair(w, p) {
     } else {
         if (wEnNorm === pEnNorm) {
             fields['英文課名'] = { label: '英文課名', word: wNameEn, pdf: pNameEn, status: 'green', desc: '英文課名完全相符' };
-        } else if (calculateSimilarity(wEnNorm, pEnNorm) > 0.85 || wEnNorm.includes(pEnNorm) || pEnNorm.includes(wEnNorm)) {
+        } else if (wEnNorm && pEnNorm && (calculateSimilarity(wEnNorm, pEnNorm) > 0.85 || 
+                   (pEnNorm.length >= 2 && wEnNorm.includes(pEnNorm)) || 
+                   (wEnNorm.length >= 2 && pEnNorm.includes(wEnNorm)))) {
             const diffDesc = describeTextDiff(wNameEn, pNameEn);
             fields['英文課名'] = {
                 label: '英文課名',
