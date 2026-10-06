@@ -2144,6 +2144,18 @@ function analyzeItemHierarchy(itemText, prevH, fieldLabel) {
         };
     }
 
+    // 5b. Alphabetic items (A., B., a., b., etc.)
+    const aMatch = raw.match(/^([A-Za-z])[.、)）]\s*(.*)$/);
+    if (aMatch) {
+        return {
+            level: 1,
+            type: 'alpha',
+            badgeText: aMatch[1].toUpperCase(),
+            indent: '',
+            cleanText: raw
+        };
+    }
+
     // 6. Section/Scheme Header ending with colon (e.g. 課程優惠方案：, 重聽服務：, 實務應用：)
     const hMatch = raw.match(/^([^：:\n]{2,10})[：:]\s*(.*)$/);
     if (hMatch && (!hMatch[2] || hMatch[2].length === 0)) {
@@ -2210,6 +2222,25 @@ function getListBulletIdentity(item) {
     if (mAlpha) return 'alpha:' + mAlpha[1].toUpperCase();
 
     return null;
+}
+
+/**
+ * Classifies an item's leading bullet or numbering type into:
+ * 'number' (1., 2., (1), 1-1, 一、), 'alpha' (a., b.), 'bullet' (•, ●, ※, PUA), or 'none'.
+ */
+function getBulletCategory(item) {
+    if (!item) return 'none';
+    const str = item.trim();
+    if (/^(?:\d+[.、．)）\s]|\d+(?:[.-]\d+)+|[（(][\d一二三四五六七八九十]+[)）]|[一二三四五六七八九十]+[、.．]|[①-⑳❶-❿㈠-㈩])/i.test(str)) {
+        return 'number';
+    }
+    if (/^[A-Za-z][.、)）]\s*/.test(str)) {
+        return 'alpha';
+    }
+    if (/^[●•※\-\*·‧・▪\uF000-\uF0FF◆▪＊★☆✦✧✓✔►▶▷▸○■□▲▼]/i.test(str)) {
+        return 'bullet';
+    }
+    return 'none';
 }
 
 /**
@@ -2287,17 +2318,22 @@ function alignOutlineWithChapters(wItems, pItems) {
                             pdf: mainPair.pdf,
                             desc: mainPair.desc,
                             diffHighlight: mainPair.diffHighlight,
-                            hierarchy: analyzeItemHierarchy(wItem, null, '課程內容')
+                            hierarchy: mainPair.hierarchy || analyzeItemHierarchy(wItem, null, '課程內容'),
+                            wHierarchy: mainPair.wHierarchy || analyzeItemHierarchy(wItem, null, '課程內容'),
+                            pHierarchy: mainPair.pHierarchy || (mainPair.pdf ? analyzeItemHierarchy(mainPair.pdf, null, '課程內容') : null)
                         });
                     } else {
                         hasRed = true;
+                        const wH = analyzeItemHierarchy(wItem, null, '課程內容');
                         details.push({
                             index: details.length + 1,
                             status: 'red',
                             word: wItem,
                             pdf: '(PDF 漏排此章節)',
                             desc: 'PDF 漏排大綱主章節',
-                            hierarchy: analyzeItemHierarchy(wItem, null, '課程內容')
+                            hierarchy: wH,
+                            wHierarchy: wH,
+                            pHierarchy: null
                         });
                     }
                 } else {
@@ -2309,7 +2345,9 @@ function alignOutlineWithChapters(wItems, pItems) {
                         word: wItem,
                         pdf: '(大綱主章節排版，細項免排)',
                         desc: '美編採大綱主章節排版，此細項依版面精簡免排 (正常)',
-                        hierarchy: subH
+                        hierarchy: subH,
+                        wHierarchy: subH,
+                        pHierarchy: null
                     });
                 }
             }
@@ -2323,7 +2361,9 @@ function alignOutlineWithChapters(wItems, pItems) {
                     word: null,
                     pdf: ep.pdf,
                     desc: 'PDF 多排此章節',
-                    hierarchy: ep.hierarchy
+                    hierarchy: ep.hierarchy,
+                    wHierarchy: null,
+                    pHierarchy: ep.pHierarchy || ep.hierarchy
                 });
             });
 
@@ -2564,7 +2604,8 @@ function alignListItems(wItems, pItems, fieldLabel) {
     let matchCount = 0;
     let hasRed = false;
     let hasYellow = false;
-    let prevH = null;
+    let prevWH = null;
+    let prevPH = null;
     let currentMainNum = 0;
     let mainCount = 0;
     let subCount = 0;
@@ -2572,15 +2613,18 @@ function alignListItems(wItems, pItems, fieldLabel) {
     consolidated.forEach((pair, idx) => {
         const w = pair.word;
         const p = pair.pdf;
-        const sampleText = (p && /^\d+[.、]/.test(p.trim())) ? p : (w || p || '');
-        const h = analyzeItemHierarchy(sampleText, prevH, fieldLabel);
+        const wH = w ? analyzeItemHierarchy(w, prevWH, fieldLabel) : null;
+        const pH = p ? analyzeItemHierarchy(p, prevPH, fieldLabel) : null;
+        if (wH) prevWH = wH;
+        if (pH) prevPH = pH;
 
-        if (h.type === 'number') {
-            currentMainNum = parseInt(h.badgeText, 10);
+        const primaryH = pH || wH || { level: 1, type: 'text', badgeText: `${idx + 1}`, indent: '' };
+
+        if (primaryH.type === 'number') {
+            currentMainNum = parseInt(primaryH.badgeText, 10);
         }
-        if (h.level >= 2) subCount++;
+        if (primaryH.level >= 2) subCount++;
         else mainCount++;
-        prevH = h;
 
         let itemStatus = 'green';
         let itemDesc = '相符';
@@ -2591,9 +2635,69 @@ function alignListItems(wItems, pItems, fieldLabel) {
             const wNormNoUrl = wNorm.replace(/https?[a-z0-9_./-]+/gi, '');
             const pNormNoUrl = pNorm.replace(/https?[a-z0-9_./-]+/gi, '');
             if (wNorm === pNorm) {
-                matchCount++;
-                itemStatus = 'green';
-                itemDesc = '相符';
+                const wCat = getBulletCategory(w);
+                const pCat = getBulletCategory(p);
+                if (wCat === 'number' && (pCat === 'bullet' || pCat === 'none')) {
+                    matchCount++;
+                    hasYellow = true;
+                    itemStatus = 'yellow';
+                    itemDesc = '內文相符，但項目符號形式不同 (Word: 編號 ⇄ PDF: 圓點)';
+                } else if (wCat === 'number' && pCat === 'alpha') {
+                    matchCount++;
+                    hasYellow = true;
+                    itemStatus = 'yellow';
+                    itemDesc = '內文相符，但項目符號形式不同 (Word: 數字編號 ⇄ PDF: 英文編號)';
+                } else if (wCat === 'bullet' && pCat === 'number') {
+                    matchCount++;
+                    hasYellow = true;
+                    itemStatus = 'yellow';
+                    itemDesc = '內文相符，但項目符號形式不同 (Word: 圓點 ⇄ PDF: 編號)';
+                } else if (wCat === 'bullet' && pCat === 'alpha') {
+                    matchCount++;
+                    hasYellow = true;
+                    itemStatus = 'yellow';
+                    itemDesc = '內文相符，但項目符號形式不同 (Word: 圓點 ⇄ PDF: 英文編號)';
+                } else if (wCat === 'alpha' && pCat === 'bullet') {
+                    matchCount++;
+                    hasYellow = true;
+                    itemStatus = 'yellow';
+                    itemDesc = '內文相符，但項目符號形式不同 (Word: 英文編號 ⇄ PDF: 圓點)';
+                } else if (wCat === 'alpha' && pCat === 'number') {
+                    matchCount++;
+                    hasYellow = true;
+                    itemStatus = 'yellow';
+                    itemDesc = '內文相符，但項目符號形式不同 (Word: 英文編號 ⇄ PDF: 數字編號)';
+                } else if (wCat === 'number' && pCat === 'number') {
+                    const wNum = getListBulletIdentity(w);
+                    const pNum = getListBulletIdentity(p);
+                    if (wNum && pNum && wNum !== pNum) {
+                        matchCount++;
+                        hasYellow = true;
+                        itemStatus = 'yellow';
+                        itemDesc = `內文相符，但項目編號不同 (Word: ${wNum.split(':')[1]} ⇄ PDF: ${pNum.split(':')[1]})`;
+                    } else {
+                        matchCount++;
+                        itemStatus = 'green';
+                        itemDesc = '相符';
+                    }
+                } else if (wCat === 'alpha' && pCat === 'alpha') {
+                    const wNum = getListBulletIdentity(w);
+                    const pNum = getListBulletIdentity(p);
+                    if (wNum && pNum && wNum !== pNum) {
+                        matchCount++;
+                        hasYellow = true;
+                        itemStatus = 'yellow';
+                        itemDesc = `內文相符，但項目編號不同 (Word: ${wNum.split(':')[1]} ⇄ PDF: ${pNum.split(':')[1]})`;
+                    } else {
+                        matchCount++;
+                        itemStatus = 'green';
+                        itemDesc = '相符';
+                    }
+                } else {
+                    matchCount++;
+                    itemStatus = 'green';
+                    itemDesc = '相符';
+                }
             } else if (calculateSimilarity(wNorm, pNorm) >= 0.7 || wNorm.includes(pNorm) || pNorm.includes(wNorm) ||
                        (wNormNoUrl.length >= 4 && (wNormNoUrl === pNormNoUrl || wNormNoUrl.includes(pNormNoUrl) || pNormNoUrl.includes(wNormNoUrl) || calculateSimilarity(wNormNoUrl, pNormNoUrl) >= 0.7))) {
                 matchCount++;
@@ -2616,7 +2720,7 @@ function alignListItems(wItems, pItems, fieldLabel) {
             itemDesc = 'PDF 多排此項目';
         }
 
-        const diffHighlight = (itemStatus === 'yellow' && w && p) ? highlightDiff(w, p) : null;
+        const diffHighlight = (itemStatus === 'yellow' && w && p && !itemDesc.includes('項目符號形式不同') && !itemDesc.includes('項目編號不同')) ? highlightDiff(w, p) : null;
 
         details.push({
             index: idx + 1,
@@ -2625,7 +2729,9 @@ function alignListItems(wItems, pItems, fieldLabel) {
             pdf: p,
             desc: itemDesc,
             diffHighlight,
-            hierarchy: h
+            hierarchy: primaryH,
+            wHierarchy: wH,
+            pHierarchy: pH
         });
     });
 
@@ -2637,8 +2743,13 @@ function alignListItems(wItems, pItems, fieldLabel) {
     } else if (hasYellow) {
         overallStatus = 'yellow';
         const hasMissingOrExtra = consolidated.some(c => !c.word || !c.pdf);
+        const hasBulletDiff = details.some(d => d.desc && (d.desc.includes('項目符號形式不同') || d.desc.includes('項目編號不同')));
+        const hasTextDiff = details.some(d => d.desc && d.desc.includes('文字微差'));
+
         if (hasMissingOrExtra) {
             overallDesc = `${fieldLabel}文字有微差或增減 (Word: ${sortedW.length}項, PDF: ${sortedP.length}項)`;
+        } else if (hasBulletDiff && !hasTextDiff) {
+            overallDesc = `${fieldLabel}內文相符，但項目符號形式有微差 (共 ${consolidated.length} 項)`;
         } else {
             overallDesc = `${fieldLabel}文字有微差 (共 ${consolidated.length} 項)`;
         }
@@ -2986,7 +3097,9 @@ function createMissingListField(label, rawVal, isWord) {
                 word: isWord ? item : null,
                 pdf: isWord ? null : item,
                 desc: isWord ? '未排入 PDF' : '原稿未列出',
-                hierarchy: h
+                hierarchy: h,
+                wHierarchy: isWord ? h : null,
+                pHierarchy: isWord ? null : h
             };
         })
     };
@@ -4000,28 +4113,31 @@ function createCourseCard(item, idx) {
                     pBadgeBg = 'bg-slate-100 text-slate-500';
                 }
 
-                const h = d.hierarchy || { level: 1, type: 'text', badgeText: `${d.index}`, indent: '' };
+                const wH = d.wHierarchy || d.hierarchy || { level: 1, type: 'text', badgeText: `${d.index}`, indent: '' };
+                const pH = d.pHierarchy || d.hierarchy || { level: 1, type: 'text', badgeText: `${d.index}`, indent: '' };
 
                 // Badge display based on hierarchy level and type
                 let wBadgeHtml = '';
                 let pBadgeHtml = '';
-                if (h.type === 'header') {
+                if (wH.type === 'header') {
                     wBadgeHtml = `<span class="inline-flex items-center justify-center px-1.5 h-5 rounded text-3xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0 mt-0.5">方案</span>`;
-                    pBadgeHtml = `<span class="inline-flex items-center justify-center px-1.5 h-5 rounded text-3xs font-bold ${pBadgeBg} shrink-0 mt-0.5">方案</span>`;
-                } else if (h.type === 'bullet' || h.type === 'sub-clause') {
+                } else if (wH.type === 'bullet' || wH.type === 'sub-clause') {
                     wBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-600 shrink-0 mt-0.5">●</span>`;
+                } else if ((wH.type === 'number' || wH.type === 'sub-number' || wH.type === 'alpha') && wH.badgeText) {
+                    wBadgeHtml = `<span class="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-3xs font-mono font-bold bg-slate-100 text-slate-700 shrink-0 mt-0.5">${escapeHtml(wH.badgeText)}</span>`;
+                }
+
+                if (pH.type === 'header') {
+                    pBadgeHtml = `<span class="inline-flex items-center justify-center px-1.5 h-5 rounded text-3xs font-bold ${pBadgeBg} shrink-0 mt-0.5">方案</span>`;
+                } else if (pH.type === 'bullet' || pH.type === 'sub-clause') {
                     pBadgeHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold ${pBadgeBg} shrink-0 mt-0.5">●</span>`;
-                } else if ((h.type === 'number' || h.type === 'sub-number') && h.badgeText) {
-                    wBadgeHtml = `<span class="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-3xs font-mono font-bold bg-slate-100 text-slate-700 shrink-0 mt-0.5">${escapeHtml(h.badgeText)}</span>`;
-                    pBadgeHtml = `<span class="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-3xs font-mono font-bold ${pBadgeBg} shrink-0 mt-0.5">${escapeHtml(h.badgeText)}</span>`;
-                } else {
-                    wBadgeHtml = '';
-                    pBadgeHtml = '';
+                } else if ((pH.type === 'number' || pH.type === 'sub-number' || pH.type === 'alpha') && pH.badgeText) {
+                    pBadgeHtml = `<span class="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-3xs font-mono font-bold ${pBadgeBg} shrink-0 mt-0.5">${escapeHtml(pH.badgeText)}</span>`;
                 }
 
                 // Strip leading duplicate bullets if bullet badge is already shown
-                const displayWord = (d.word && h.type === 'bullet') ? d.word.replace(/^[●•※\-\*·‧・▪\uF000-\uF0FF]\s*/, '') : d.word;
-                const displayPdf = (d.pdf && h.type === 'bullet') ? d.pdf.replace(/^[●•※\-\*·‧・▪\uF000-\uF0FF]\s*/, '') : d.pdf;
+                const displayWord = (d.word && (wH.type === 'bullet' || wH.type === 'sub-clause')) ? d.word.replace(/^[\s\uF000-\uF0FF•●\-\*※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]+\s*/, '') : d.word;
+                const displayPdf = (d.pdf && (pH.type === 'bullet' || pH.type === 'sub-clause')) ? d.pdf.replace(/^[\s\uF000-\uF0FF•●\-\*※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]+\s*/, '') : d.pdf;
 
                 let wordContentHtml = displayWord ? escapeHtml(displayWord) : '<span class="text-slate-400 italic">(Word 無此項)</span>';
                 let pdfContentHtml = displayPdf ? escapeHtml(displayPdf) : (d.status === 'gray' ? '<span class="text-slate-400 italic">(依排版規則免排)</span>' : '<span class="font-bold text-red-600">❌ (PDF 漏排此項)</span>');
@@ -4032,13 +4148,14 @@ function createCourseCard(item, idx) {
                 }
 
                 // Hierarchy row indentation and header styling
-                const rowIndentClass = h.level >= 2 ? 'md:ml-6 ml-3 pl-2.5 border-l-2 border-indigo-200/70' : '';
-                const headerBoxClass = h.type === 'header' ? 'font-semibold bg-slate-50/80' : '';
+                const maxLevel = Math.max(wH.level || 1, pH.level || 1);
+                const rowIndentClass = maxLevel >= 2 ? 'md:ml-6 ml-3 pl-2.5 border-l-2 border-indigo-200/70' : '';
+                const headerBoxClass = (wH.type === 'header' || pH.type === 'header') ? 'font-semibold bg-slate-50/80' : '';
 
                 itemsHtml += `
                     <div class="grid grid-cols-2 gap-3 items-stretch ${rowIndentClass}">
                         <!-- Word Item Box -->
-                        <div class="p-2.5 rounded-lg border border-slate-200 ${h.type === 'header' ? headerBoxClass : 'bg-white'} flex items-start space-x-2 text-xs text-slate-800 leading-relaxed whitespace-pre-line break-words shadow-2xs">
+                        <div class="p-2.5 rounded-lg border border-slate-200 ${wH.type === 'header' ? headerBoxClass : 'bg-white'} flex items-start space-x-2 text-xs text-slate-800 leading-relaxed whitespace-pre-line break-words shadow-2xs">
                             ${wBadgeHtml}
                             <div class="flex-1 min-w-0">
                                 ${wordContentHtml}
@@ -4046,7 +4163,7 @@ function createCourseCard(item, idx) {
                         </div>
 
                         <!-- PDF Item Box -->
-                        <div class="p-2.5 rounded-lg border ${pBorder} ${pBg} ${h.type === 'header' ? headerBoxClass : ''} flex items-start space-x-2 text-xs ${pTextColor} leading-relaxed whitespace-pre-line break-words shadow-2xs">
+                        <div class="p-2.5 rounded-lg border ${pBorder} ${pBg} ${pH.type === 'header' ? headerBoxClass : ''} flex items-start space-x-2 text-xs ${pTextColor} leading-relaxed whitespace-pre-line break-words shadow-2xs">
                             ${pBadgeHtml}
                             <div class="flex-1 min-w-0">
                                 ${pdfContentHtml}
