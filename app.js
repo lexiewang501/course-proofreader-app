@@ -32,7 +32,7 @@ const LIST_FIELDS = new Set([
     '先修課程'
 ]);
 
-const BULLET_ITEM_PATTERN = /^(?:第\s*[一二三四五六七八九十\d]+\s*[天章節週講次期階段回集堂部]|[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\b\d{1,2}\s+(?![小時天歲折元點門科題人個\d]|分鐘|年|月|日)|\b\d{1,2}-\d{1,3}(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘)|$)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天歲折元點門科題人個\d]|分鐘)|$)|[【\[]\d+[】\]]|[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
+const BULLET_ITEM_PATTERN = /^(?:第\s*[一二三四五六七八九十\d]+\s*[天章節週講次期階段回集堂部]|[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\b\d{1,2}\s+(?![小時天歲折元點門科題人個\d]|分鐘|年|月|日)|\b\d{1,2}-\d{1,3}(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘)|$)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天歲折元點門科題人個\d]|分鐘)|$)|[【\[]\d+[】\]]|[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]|[-*](?:\s+|$)|(?:Lab|Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+(?:[-~至到與和]\d+)?|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
 const MODULE_HEADER_PATTERN = /^(?:[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼-]\s*)?(?:第\s*[一二三四五六七八九十\d]+\s*[天章節週講次期階段回集堂部]|Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+/i;
 
 // Global Application State
@@ -1464,7 +1464,7 @@ function splitInlineBullets(text) {
  */
 function splitOutlineItems(text) {
     if (!text) return [];
-    const parts = text.split(/(?=(?<=^|[\s\r\n])(?<!Top\s*|top\s*|OS\s*|os\s*|v\s*|V\s*|ver\s*|version\s*)\d{1,2}[.、](?=(?:\s+|[\u4e00-\u9fa5➔→•(（【\["'「『]))|(?<=^|[\s\r\n])\d{1,2}-\d{1,3}(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
+    const parts = text.split(/(?=(?<=^|[\s\r\n])(?<!(?:Lab|lab|LAB|Lesson|lesson|Module|module|Chapter|chapter|Unit|unit|Section|section|Topic|topic|Domain|domain|Day|day|Step|step|Phase|phase|Part|part|Top|top|OS|os|ver|version|v|V|條款|章節|單元|主題|階段|步驟)\s*)\d{1,2}[.、](?=(?:\s+|[\u4e00-\u9fa5➔→•(（【\["'「『]))|(?<=^|[\s\r\n])(?<!(?:Lab|lab|LAB|Lesson|lesson|Module|module|Chapter|chapter|Unit|unit|Section|section|Topic|topic|Domain|domain|Day|day|Step|step|Phase|phase|Part|part|Top|top|OS|os|ver|version|v|V|條款|章節|單元|主題|階段|步驟)\s*)\d{1,2}-\d{1,3}(?:[、.．:：)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘))|\s*[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]\s*|(?:^|[\r\n])\s*[-*]\s+|\s+[-*]\s+|(?<=^|[\s\r\n])(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]))/);
     const res = [];
     let cur = '';
     for (const p of parts) {
@@ -1582,9 +1582,10 @@ function extractListItems(paragraphs, fullText, isNotes = false) {
         } else if (prevIsBullet && (
             /[，,、(（與和或的之及]$/.test(prevItem) || 
             /^[a-z，,、；;與和或的之及]/.test(item) ||
+            /^[●•※\-\*·‧・▪\uF000-\uF0FF]?\s*(?:Lab|Lesson|Module|Chapter|Unit|Section|Topic|Domain|Day|Step|Phase|Part|第\s*[一二三四五六七八九十\d]+\s*[天章節週講次期階段回集堂部])\s*$/i.test(prevItem) ||
             ((prevItem.match(/[(（]/g) || []).length > (prevItem.match(/[)）]/g) || []).length)
         )) {
-            // Continuation line of an incomplete bullet statement
+            // Continuation line of an incomplete bullet statement or lone prefix label
             items[items.length - 1] += ' ' + item;
         } else {
             items.push(item);
