@@ -32,8 +32,8 @@ const LIST_FIELDS = new Set([
     '先修課程'
 ]);
 
-const BULLET_ITEM_PATTERN = /^(?:[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\b\d{1,2}\s+(?![小時天歲折元點門科題人個\d]|分鐘|年|月|日)|\b\d{1,2}-\d{1,3}(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘)|$)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天歲折元點門科題人個\d]|分鐘)|$)|[【\[]\d+[】\]]|[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
-const MODULE_HEADER_PATTERN = /^(?:[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼-]\s*)?(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+/i;
+const BULLET_ITEM_PATTERN = /^(?:第\s*[一二三四五六七八九十\d]+\s*[天章節週講次期階段回集堂部]|[一二三四五六七八九十百]+[、.．]|[（(][一二三四五六七八九十百\d]+[)）]|[①-⑳❶-❿㈠-㈩]|\d+[、．]|\d+\.(?!\d)|\b\d{1,2}\s+(?![小時天歲折元點門科題人個\d]|分鐘|年|月|日)|\b\d{1,2}-\d{1,3}(?:[、.．)）\s]|(?![小時天歲折元點門科題人個\d]|分鐘)|$)|\d+(?:\.\d+)+(?:[、.．)）]|\s+(?![小時天歲折元點門科題人個\d]|分鐘)|$)|[【\[]\d+[】\]]|[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼]|[-*](?:\s+|$)|(?:Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+|[A-Za-z]\d+(?:\.\d+)+|[A-Za-z][.、)）])/i;
+const MODULE_HEADER_PATTERN = /^(?:[\uF000-\uF0FF•●※·‧・◆▪＊★☆✦✧✓✔✗✘►▶▷▸○■□▲▼-]\s*)?(?:第\s*[一二三四五六七八九十\d]+\s*[天章節週講次期階段回集堂部]|Lesson|Module|Chapter|Unit|Section|Topic|Domain|主題|單元|章節|階段|步驟|目標|項目|Day|Step|Phase|Part)\s*[一二三四五六七八九十\d]+/i;
 
 // Global Application State
 const state = {
@@ -2305,11 +2305,16 @@ function isOutlineMainChapter(raw) {
     if (!raw) return false;
     const str = raw.trim();
     if (isOutlineSubItem(str)) return false;
-    if (/^(?:Module|Chapter|Unit|Lesson|Domain|Part|Phase|主題|單元|章節|第[一二三四五六七八九十\d]+[章單元節])/i.test(str)) return true;
+    if (/^(?:Module|Chapter|Unit|Lesson|Domain|Part|Phase|主題|單元|章節|第\s*[一二三四五六七八九十\d]+\s*[天章節週講次期階段回集堂部])/i.test(str)) return true;
     if (/^[一二三四五六七八九十]+[、.．]/.test(str)) return true;
     if (/^\d+[.、．\s]/.test(str)) return true;
     if (/^\d+\s*[\u4e00-\u9fa5A-Za-z]/.test(str)) return true;
     return false;
+}
+
+function isParentContainerHeader(str) {
+    if (!str) return false;
+    return /^(?:第\s*[一二三四五六七八九十\d]+\s*[天章節週講次期階段回集堂部]|(?:Module|Chapter|Unit|Lesson|Domain|Part|Phase|主題|單元|章節)\s*[一二三四五六七八九十\d]+)/i.test(str.trim());
 }
 
 /**
@@ -2318,13 +2323,25 @@ function isOutlineMainChapter(raw) {
  */
 function alignOutlineWithChapters(wItems, pItems) {
     if (!wItems || !pItems) return null;
-    const wMainIndices = [];
-    wItems.forEach((it, idx) => {
-        if (isOutlineMainChapter(it)) wMainIndices.push(idx);
-    });
 
-    const isSubOnly = wItems.some(isOutlineSubItem);
-    const pAllMain = pItems.every(isOutlineMainChapter);
+    // Check if wItems has higher-level parent container headers (e.g. 第一天, 第二天... or Module 1, Module 2...)
+    const parentContainerHeaders = wItems.filter(isParentContainerHeader);
+    const hasParentContainers = parentContainerHeaders.length >= 2;
+
+    let wMainIndices = [];
+    if (hasParentContainers) {
+        // If parent container headers exist, only they are the top-level main chapters!
+        wItems.forEach((it, idx) => {
+            if (isParentContainerHeader(it)) wMainIndices.push(idx);
+        });
+    } else {
+        wItems.forEach((it, idx) => {
+            if (isOutlineMainChapter(it)) wMainIndices.push(idx);
+        });
+    }
+
+    const isSubOnly = wItems.length > wMainIndices.length;
+    const pAllMain = pItems.every(it => hasParentContainers ? isParentContainerHeader(it) : isOutlineMainChapter(it));
 
     if (wMainIndices.length >= 2 && isSubOnly && pItems.length >= 2 && pItems.length <= wMainIndices.length + 2 && pAllMain) {
         const wMainTexts = wMainIndices.map(idx => wItems[idx]);
