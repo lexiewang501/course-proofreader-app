@@ -41,6 +41,9 @@
 ├── app.js                  # 核心解析與比對引擎
 ├── server.js               # 本機輕量 HTTP 伺服器
 ├── style.css               # 介面樣式與紅綠燈動畫
+├── verify_10_catalogs.js   # 10 大手冊全自動回歸測試腳本
+├── AI_GUIDE.md             # 🤖 AI 協作開發指南與防踩坑規範 (接手 AI 必讀)
+├── CHANGELOG.md            # 📝 完整歷次版本更新日誌 (逐版修正項目)
 ├── lib/                    # 本地離線解析函式庫
 │   ├── jszip.min.js        # docx 解壓縮與 XML 表格解析
 │   ├── pdf.min.js          # Mozilla PDF.js 核心引擎
@@ -52,6 +55,9 @@
 ---
 
 ## 🏷️ 版本紀錄
+
+> 💡 欲查看更詳細的逐次子版本修正清單（v3.0 ~ v3.5.2 各項 bug 修復與 edge cases），請參閱 👉 **[CHANGELOG.md (更新日誌)](CHANGELOG.md)**。
+> 💡 未來接手本專案的 AI 請先參閱 👉 **[AI_GUIDE.md (AI 協作指南)](AI_GUIDE.md)**。
 
 ### 📌 [v3.5.2] - 正確可使用版本 V3 (重大里程碑版本)
 - **多階層清單與 Word 原生 Numbering 完全解析**：
