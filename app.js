@@ -330,7 +330,7 @@ function extractCourseIdentityFromWord(rows, course) {
             }
         }
     } else {
-        rawTitle = rawTitle.replace(new RegExp(`^${rawCode}[：:\\s]*`), '').trim();
+        rawTitle = rawTitle.replace(new RegExp(`^${rawCode}[：:]+\\s*`), '').trim();
     }
 
     // 4. Fallback: extract course code from rawEnTitle if still not found
@@ -559,7 +559,7 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
 
     let zhTitle = zhLines.join(' ').replace(/\s+/g, ' ').trim();
     if (code) {
-        zhTitle = zhTitle.replace(new RegExp(`^${code}[：:\\s]*`), '').trim();
+        zhTitle = zhTitle.replace(new RegExp(`^${code}[：:]+\\s*`), '').trim();
     } else {
         const prefixMatch = zhTitle.match(/^([A-Za-z0-9_-]{2,10})[：:\s]+(.*)$/);
         if (prefixMatch && !['APP', 'DApp', 'Web3', 'EVM', 'Full', 'Stack', 'Course', 'AI'].includes(prefixMatch[1])) {
