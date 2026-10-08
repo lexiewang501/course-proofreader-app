@@ -351,6 +351,24 @@ function extractCourseIdentityFromWord(rows, course) {
         rawEnTitle = rawEnTitle.replace(new RegExp(`^${rawCode}[：:\\s]+`, 'i'), '').trim();
     }
 
+    // Deduplicate repeated identical halves (e.g. "AWS Technical Essentials AWS Technical Essentials")
+    if (rawEnTitle) {
+        const words = rawEnTitle.trim().split(/\s+/);
+        if (words.length >= 2 && words.length % 2 === 0) {
+            const half = words.length / 2;
+            const firstHalf = words.slice(0, half).join(' ');
+            const secondHalf = words.slice(half).join(' ');
+            if (firstHalf.toLowerCase() === secondHalf.toLowerCase()) {
+                rawEnTitle = firstHalf;
+            }
+        }
+    }
+
+    // Deduplicate leading partial acronym or repeated token stutter (e.g. "CCN CCNA Exam..." -> "CCNA Exam...")
+    if (rawEnTitle) {
+        rawEnTitle = rawEnTitle.replace(/^([A-Za-z]{2,8})\s+(?=\1)/i, '').trim();
+    }
+
     course.course_code = rawCode.trim();
     course.course_name_zh = rawTitle.replace(/^[：:\s|]+/, '').replace(/\s+/g, ' ').trim();
     course.course_name_en = rawEnTitle.replace(/^[：:\s|]+/, '').replace(/\s+/g, ' ').trim();
@@ -567,6 +585,11 @@ function extractCourseIdentityFromPdf(headerItems, metaY, courseTop) {
                 enTitle = firstHalf;
             }
         }
+    }
+
+    // Deduplicate leading partial acronym or repeated token stutter (e.g. "CCN CCNA Exam..." -> "CCNA Exam...")
+    if (enTitle) {
+        enTitle = enTitle.replace(/^([A-Za-z]{2,8})\s+(?=\1)/i, '').trim();
     }
 
     if (zhTitle) {
