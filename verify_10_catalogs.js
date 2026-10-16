@@ -73,7 +73,13 @@ async function run() {
     ];
 
     console.log(`Starting 10-Catalog Verification (Testing ${pairs.length} catalogs)...`);
-    let totalRed = 0;
+    // Known confirmed real defects present in the sample files (not parser false positives)
+    const knownTrueDefects = [
+        { catalog: 'OpenSource', code: 'Devsre', field: '時數', reason: '美編排版單位殘缺「14小」(缺少「時」)' }
+    ];
+
+    let unexpectedRed = 0;
+    let confirmedRed = 0;
     let totalYellow = 0;
     let totalGreen = 0;
     let totalCoursesTested = 0;
@@ -96,14 +102,21 @@ async function run() {
         const comps = compareCourseData(docxCourses, pdfCourses);
         console.log(`  Matched Comparisons: ${comps.length} courses`);
 
-        let catRed = 0, catYellow = 0, catGreen = 0;
+        let catUnexpectedRed = 0, catConfirmedRed = 0, catYellow = 0, catGreen = 0;
         for (const comp of comps) {
             totalCoursesTested++;
             for (const f of Object.values(comp.fields)) {
                 if (f.status === 'red') {
-                    catRed++;
-                    totalRed++;
-                    console.log(`    [RED] Course ${comp.code || comp.name} -> Field: ${f.label} (${f.desc})`);
+                    const isKnown = knownTrueDefects.some(k => k.catalog === pair.name && k.code === (comp.code || comp.name) && k.field === f.label);
+                    if (isKnown) {
+                        catConfirmedRed++;
+                        confirmedRed++;
+                        console.log(`    [CONFIRMED PDF DEFECT] Course ${comp.code || comp.name} -> Field: ${f.label} (${f.desc})`);
+                    } else {
+                        catUnexpectedRed++;
+                        unexpectedRed++;
+                        console.log(`    [UNEXPECTED RED] Course ${comp.code || comp.name} -> Field: ${f.label} (${f.desc})`);
+                    }
                 } else if (f.status === 'yellow') {
                     catYellow++;
                     totalYellow++;
@@ -113,22 +126,24 @@ async function run() {
                 }
             }
         }
-        console.log(`  Result for ${pair.name}: Red=${catRed}, Yellow=${catYellow}, Green=${catGreen}`);
+        console.log(`  Result for ${pair.name}: UnexpectedRed=${catUnexpectedRed}, ConfirmedDefects=${catConfirmedRed}, Yellow=${catYellow}, Green=${catGreen}`);
     }
 
     console.log(`\n========================================`);
     console.log(`VERIFICATION SUMMARY:`);
-    console.log(`Total Catalogs Tested: ${pairs.length}`);
-    console.log(`Total Courses Tested:  ${totalCoursesTested}`);
-    console.log(`Total Red Fields:      ${totalRed}`);
-    console.log(`Total Yellow Fields:   ${totalYellow}`);
-    console.log(`Total Green Fields:    ${totalGreen}`);
+    console.log(`Total Catalogs Tested:     ${pairs.length}`);
+    console.log(`Total Courses Tested:      ${totalCoursesTested}`);
+    console.log(`Confirmed Real PDF Errors: ${confirmedRed}`);
+    console.log(`Unexpected Red Errors:     ${unexpectedRed}`);
+    console.log(`Total Yellow Fields:       ${totalYellow}`);
+    console.log(`Total Green Fields:        ${totalGreen}`);
     console.log(`========================================`);
 
-    if (totalRed === 0) {
-        console.log(`SUCCESS: 0 RED ISSUES ACROSS ALL 10 CATALOGS!`);
+    if (unexpectedRed === 0 && confirmedRed === knownTrueDefects.length) {
+        console.log(`SUCCESS: 0 UNEXPECTED RED ISSUES ACROSS ALL 10 CATALOGS!`);
+        console.log(`(Correctly identified ${confirmedRed}/${knownTrueDefects.length} real PDF layout defect(s))`);
     } else {
-        console.error(`FAILED: FOUND ${totalRed} RED ISSUES!`);
+        console.error(`FAILED: FOUND ${unexpectedRed} UNEXPECTED RED ISSUES, ${confirmedRed}/${knownTrueDefects.length} CONFIRMED DEFECTS!`);
         process.exit(1);
     }
 }

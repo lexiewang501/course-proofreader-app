@@ -1343,8 +1343,60 @@ async function parsePdf(buffer) {
             metaLineItems.sort((a, b) => a.x - b.x);
             const metaLineText = metaLineItems.map(it => it.str).join(' ');
 
-            const hoursMatch = metaLineText.match(/時數[：:\s]*([0-9.]+)\s*小時?/);
-            if (hoursMatch) course['時數'] = hoursMatch[1];
+            // Extract and parse 時數 segment with unit and duplicate label verification
+            let hoursSeg = '';
+            if (metaLineText.includes('｜') || metaLineText.includes('|')) {
+                const segs = metaLineText.split(/[｜|]/).map(s => s.trim());
+                hoursSeg = segs.find(s => /^時數/.test(s)) || segs.find(s => s.includes('時數')) || '';
+            } else {
+                const m = metaLineText.match(/時數[^\n費用點數教材]*/);
+                if (m) hoursSeg = m[0].trim();
+            }
+
+            if (hoursSeg) {
+                const dupCount = (hoursSeg.match(/時數/g) || []).length;
+                const hasDupLabel = dupCount > 1 || /(?:時數[：:\s]*){2,}/.test(hoursSeg);
+
+                const valMatch = hoursSeg.match(/時數[：:\s]*([0-9.]+)\s*([^\s0-9.,|｜]*)/);
+                const numMatch = valMatch || hoursSeg.match(/([0-9.]+)\s*([^\s0-9.,|｜]*)/);
+
+                if (numMatch) {
+                    const num = numMatch[1];
+                    const unit = (numMatch[2] || '').trim();
+                    course['時數'] = num;
+                    course['時數_raw'] = hoursSeg;
+
+                    if (hasDupLabel) {
+                        course['時數_err'] = `多排「時數:」標籤（${hoursSeg}）`;
+                        course['時數_display'] = hoursSeg;
+                    } else if (unit === '小') {
+                        course['時數_err'] = `單位殘缺「${num}小」(缺少「時」)`;
+                        course['時數_display'] = `${num} 小`;
+                    } else if (unit === '時') {
+                        course['時數_err'] = `單位殘缺「${num}時」(缺少「小」)`;
+                        course['時數_display'] = `${num} 時`;
+                    } else if (!unit) {
+                        course['時數_err'] = `缺少單位「小時」`;
+                        course['時數_display'] = num;
+                    } else if (!/^(?:小時|hrs?|hours?)$/i.test(unit)) {
+                        course['時數_err'] = `單位文字異常「${unit}」`;
+                        course['時數_display'] = `${num} ${unit}`;
+                    } else {
+                        course['時數_display'] = `${num} 小時`;
+                    }
+                } else {
+                    if (hasDupLabel) {
+                        course['時數_err'] = `多排「時數:」標籤（${hoursSeg}）`;
+                        course['時數_display'] = hoursSeg;
+                    }
+                }
+            } else {
+                const fallbackMatch = metaLineText.match(/時數[：:\s]*([0-9.]+)\s*小時?/);
+                if (fallbackMatch) {
+                    course['時數'] = fallbackMatch[1];
+                    course['時數_display'] = `${fallbackMatch[1]} 小時`;
+                }
+            }
 
             const priceMatch = metaLineText.match(/費用[：:\s]*([0-9,]+)\s*元?/);
             if (priceMatch) course['費用'] = priceMatch[1].replace(/,/g, '');
@@ -3206,7 +3258,7 @@ function compareCourseData(wordCourses, pdfCourses) {
                     '英文課名': { status: 'gray', label: '英文課名', word: '(Word 原稿無)', pdf: pNameEn || '-', desc: 'Word 原稿無此課程' },
                     '課程名稱': { status: 'gray', label: '中文課名', word: '(Word 原稿無)', pdf: pNameZh || '-', desc: 'Word 原稿無此課程' },
                     '英文名稱': { status: 'gray', label: '英文課名', word: '(Word 原稿無)', pdf: pNameEn || '-', desc: 'Word 原稿無此課程' },
-                    '時數': { status: 'gray', label: '時數', word: '-', pdf: `${p['時數']} 小時`, desc: '原稿無' },
+                    '時數': { status: 'gray', label: '時數', word: '-', pdf: p['時數_display'] || `${p['時數']} 小時`, desc: '原稿無' },
                     '點數': { status: 'gray', label: '點數', word: '-', pdf: `${p['點數']} 點`, desc: '原稿無' },
                     '費用': { status: 'gray', label: '費用', word: '-', pdf: `${Number(p['費用'] || 0).toLocaleString()} 元`, desc: '原稿無' },
                     '教材': { status: 'gray', label: '教材', word: '-', pdf: p['教材'] || '-', desc: '原稿無' },
@@ -3361,18 +3413,36 @@ function compareSinglePair(w, p) {
     // Backward compatibility for 英文名稱
     fields['英文名稱'] = fields['英文課名'];
 
-    // 3. 時數 (Rule 4: Mismatch is RED)
+    // 3. 時數 (Rule 4: Mismatch or format/unit error is RED)
     const wHours = parseFloat(w['時數']) || 0;
     const pHours = parseFloat(p['時數']) || 0;
-    if (wHours > 0 && pHours > 0 && wHours === pHours) {
-        fields['時數'] = { label: '時數', word: `${w['時數']} 小時`, pdf: `${p['時數']} 小時`, status: 'green', desc: '時數相符' };
+    const pdfHoursDisplay = p['時數_display'] || (pHours > 0 ? `${p['時數']} 小時` : (p['時數'] || '未填寫'));
+    const wordHoursDisplay = `${w['時數'] || 0} 小時`;
+
+    if (p['時數_err']) {
+        fields['時數'] = {
+            label: '時數',
+            word: wordHoursDisplay,
+            pdf: pdfHoursDisplay,
+            status: 'red',
+            desc: `時數格式有誤！Word 為「${wordHoursDisplay}」，但 PDF ${p['時數_err']}`
+        };
+        hasRed = true;
+    } else if (wHours > 0 && pHours > 0 && wHours === pHours) {
+        fields['時數'] = {
+            label: '時數',
+            word: wordHoursDisplay,
+            pdf: pdfHoursDisplay,
+            status: 'green',
+            desc: '時數相符'
+        };
     } else {
         fields['時數'] = {
             label: '時數',
-            word: `${w['時數'] || 0} 小時`,
-            pdf: `${p['時數'] || 0} 小時`,
+            word: wordHoursDisplay,
+            pdf: pdfHoursDisplay,
             status: 'red',
-            desc: `時數不一致！Word 寫 ${w['時數']} 小時，但 PDF 寫 ${p['時數']} 小時`
+            desc: `時數不一致！Word 寫 ${wordHoursDisplay}，但 PDF 寫 ${pdfHoursDisplay}`
         };
         hasRed = true;
     }
