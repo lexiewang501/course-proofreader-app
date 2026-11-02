@@ -75,7 +75,16 @@ async function run() {
     console.log(`Starting 10-Catalog Verification (Testing ${pairs.length} catalogs)...`);
     // Known confirmed real defects present in the sample files (not parser false positives)
     const knownTrueDefects = [
-        { catalog: 'OpenSource', code: 'Devsre', field: '時數', reason: '美編排版單位殘缺「14小」(缺少「時」)' }
+        { catalog: 'OpenSource', code: 'Devsre', field: '時數', reason: '美編排版單位殘缺「14小」(缺少「時」)' },
+        { catalog: 'OpenSource', code: 'CDAA', field: '點數', reason: 'PDF 漏填點數' },
+        { catalog: 'OpenSource', code: 'CDAA', field: '費用', reason: 'PDF 漏填費用' },
+        { catalog: 'OpenSource', code: 'CDSD', field: '點數', reason: 'PDF 漏填點數' },
+        { catalog: 'OpenSource', code: 'CDSD', field: '費用', reason: 'PDF 漏填費用' },
+        { catalog: 'OpenSource', code: 'ACCW', field: '點數', reason: 'Word 與 PDF 皆漏填點數' },
+        { catalog: 'OpenSource', code: 'ACCW', field: '費用', reason: 'Word 與 PDF 皆漏填費用' },
+        { catalog: 'Oracle DB', code: '23aiDGA', field: '點數', reason: 'Word 與 PDF 皆漏填點數（誤植為時數：30小時）' },
+        { catalog: 'Oracle DB', code: '23aiRAC', field: '點數', reason: 'Word 與 PDF 皆漏填點數（誤植為時數：30小時）' },
+        { catalog: 'Oracle DB', code: '23aiPLS', field: '點數', reason: 'Word 與 PDF 皆漏填點數（誤植為時數：30小時）' }
     ];
 
     let unexpectedRed = 0;

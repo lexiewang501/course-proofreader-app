@@ -1053,6 +1053,21 @@ async function parseDocx(buffer) {
                 const pointsMatch = rowFullText.match(/點數[：:\s]*([0-9.]+)\s*點?/);
                 if (pointsMatch && !course['點數']) course['點數'] = pointsMatch[1];
 
+                // Detect misplaced / duplicated metadata fields in Word (e.g. 時數 | 費用 | 時數 instead of 點數)
+                if (!course['點數'] || !course['費用'] || !course['時數']) {
+                    const allHoursMatches = rowFullText.match(/時數[：:\s]*[0-9.]+\s*小時?/g) || [];
+                    const allPriceMatches = rowFullText.match(/費用[：:\s]*[0-9,]+\s*元?/g) || [];
+                    const allPointsMatches = rowFullText.match(/點數[：:\s]*[0-9.]+\s*點?/g) || [];
+                    const dupSeg = allHoursMatches.length > 1 ? allHoursMatches[allHoursMatches.length - 1].replace(/\s+/g, ' ').trim()
+                        : (allPriceMatches.length > 1 ? allPriceMatches[allPriceMatches.length - 1].replace(/\s+/g, ' ').trim()
+                        : (allPointsMatches.length > 1 ? allPointsMatches[allPointsMatches.length - 1].replace(/\s+/g, ' ').trim() : ''));
+                    if (dupSeg) {
+                        if (!course['點數']) course['點數_misplaced'] = dupSeg;
+                        if (!course['費用']) course['費用_misplaced'] = dupSeg;
+                        if (!course['時數']) course['時數_misplaced'] = dupSeg;
+                    }
+                }
+
                 const matCell = row.find(c => /(?:^|[\s|｜])教材[：:\s]/.test(c.fullText));
                 if (matCell && !course['教材']) {
                     const m = matCell.fullText.match(/(?:^|[\s|｜])教材[：:\s]+([^|｜\n]+)/);
@@ -1403,6 +1418,31 @@ async function parsePdf(buffer) {
 
             const pointsMatch = metaLineText.match(/點數[：:\s]*([0-9.]+)\s*點?/);
             if (pointsMatch) course['點數'] = pointsMatch[1];
+
+            // Detect misplaced / duplicated metadata segments when a mandatory field (時數/費用/點數) is missing
+            if (!course['點數'] || !course['費用'] || !course['時數']) {
+                const metaSegs = (metaLineText.includes('｜') || metaLineText.includes('|'))
+                    ? metaLineText.split(/[｜|]/).map(s => s.trim()).filter(Boolean)
+                    : [];
+                if (!course['點數']) {
+                    const ptSeg = metaSegs.find(s => s.includes('點數'));
+                    const hoursSegs = metaSegs.filter(s => s.includes('時數'));
+                    if (ptSeg && /(?:時數|費用)/.test(ptSeg)) {
+                        course['點數_misplaced'] = ptSeg.replace(/\s+/g, ' ').trim();
+                    } else if (hoursSegs.length > 1) {
+                        course['點數_misplaced'] = hoursSegs[hoursSegs.length - 1].replace(/\s+/g, ' ').trim();
+                    }
+                }
+                if (!course['費用']) {
+                    const prSeg = metaSegs.find(s => s.includes('費用'));
+                    const hoursSegs = metaSegs.filter(s => s.includes('時數'));
+                    if (prSeg && /(?:時數|點數)/.test(prSeg)) {
+                        course['費用_misplaced'] = prSeg.replace(/\s+/g, ' ').trim();
+                    } else if (hoursSegs.length > 1 && !course['點數_misplaced']) {
+                        course['費用_misplaced'] = hoursSegs[hoursSegs.length - 1].replace(/\s+/g, ' ').trim();
+                    }
+                }
+            }
 
             const matMatch = metaLineText.match(/教材[：:\s]*([^｜|\n]+)/);
             if (matMatch) {
@@ -3413,13 +3453,47 @@ function compareSinglePair(w, p) {
     // Backward compatibility for 英文名稱
     fields['英文名稱'] = fields['英文課名'];
 
-    // 3. 時數 (Rule 4: Mismatch or format/unit error is RED)
+    // 3. 時數 (Rule 4 & Rule 10: Mandatory field; missing, mismatch, or format/unit error is RED)
     const wHours = parseFloat(w['時數']) || 0;
     const pHours = parseFloat(p['時數']) || 0;
-    const pdfHoursDisplay = p['時數_display'] || (pHours > 0 ? `${p['時數']} 小時` : (p['時數'] || '未填寫'));
-    const wordHoursDisplay = `${w['時數'] || 0} 小時`;
+    const wHasHours = Boolean(w['時數'] && String(w['時數']).trim() && wHours > 0);
+    const pHasHours = Boolean(p['時數'] && String(p['時數']).trim() && pHours > 0);
+    const pdfHoursDisplay = p['時數_display'] || (pHasHours ? `${p['時數']} 小時` : (p['時數_misplaced'] ? `無 (誤植為「${p['時數_misplaced']}」)` : '無 (漏填)'));
+    const wordHoursDisplay = wHasHours ? `${w['時數']} 小時` : (w['時數_misplaced'] ? `無 (誤植為「${w['時數_misplaced']}」)` : '無 (漏填)');
 
-    if (p['時數_err']) {
+    if (!wHasHours && !pHasHours) {
+        const misplacedHint = (w['時數_misplaced'] || p['時數_misplaced'])
+            ? `（欄位誤植為「${w['時數_misplaced'] || p['時數_misplaced']}」）`
+            : '';
+        fields['時數'] = {
+            label: '時數',
+            word: wordHoursDisplay,
+            pdf: pdfHoursDisplay,
+            status: 'red',
+            desc: `缺少時數資料！Word 原稿與 PDF 皆漏填「時數」欄位${misplacedHint}`
+        };
+        hasRed = true;
+    } else if (wHasHours && !pHasHours) {
+        const misplacedHint = p['時數_misplaced'] ? `（PDF 誤植為「${p['時數_misplaced']}」）` : '';
+        fields['時數'] = {
+            label: '時數',
+            word: wordHoursDisplay,
+            pdf: pdfHoursDisplay,
+            status: 'red',
+            desc: `PDF 漏填時數！Word 原稿為 ${wordHoursDisplay}，但 PDF 未填寫「時數」${misplacedHint}`
+        };
+        hasRed = true;
+    } else if (!wHasHours && pHasHours) {
+        const misplacedHint = w['時數_misplaced'] ? `（Word 誤植為「${w['時數_misplaced']}」）` : '';
+        fields['時數'] = {
+            label: '時數',
+            word: wordHoursDisplay,
+            pdf: pdfHoursDisplay,
+            status: 'red',
+            desc: `Word 漏填時數！Word 原稿未填寫「時數」${misplacedHint}，PDF 為 ${pdfHoursDisplay}`
+        };
+        hasRed = true;
+    } else if (p['時數_err']) {
         fields['時數'] = {
             label: '時數',
             word: wordHoursDisplay,
@@ -3428,7 +3502,7 @@ function compareSinglePair(w, p) {
             desc: `時數格式有誤！Word 為「${wordHoursDisplay}」，但 PDF ${p['時數_err']}`
         };
         hasRed = true;
-    } else if (wHours > 0 && pHours > 0 && wHours === pHours) {
+    } else if (wHours === pHours) {
         fields['時數'] = {
             label: '時數',
             word: wordHoursDisplay,
@@ -3447,82 +3521,110 @@ function compareSinglePair(w, p) {
         hasRed = true;
     }
 
-    // 4. 點數 (Rule 4: Mismatch is RED, blank in PDF draft is YELLOW)
+    // 4. 點數 (Rule 4 & Rule 10: Mandatory field; missing, misplaced, or mismatch is RED)
     const wPoints = parseFloat(w['點數']) || 0;
     const pPoints = parseFloat(p['點數']) || 0;
     const wHasPoints = Boolean(w['點數'] && String(w['點數']).trim() && wPoints > 0);
     const pHasPoints = Boolean(p['點數'] && String(p['點數']).trim() && pPoints > 0);
+    const wordPointsDisplay = wHasPoints ? `${w['點數']} 點` : (w['點數_misplaced'] ? `無 (誤植為「${w['點數_misplaced']}」)` : '無 (漏填)');
+    const pdfPointsDisplay = pHasPoints ? `${p['點數']} 點` : (p['點數_misplaced'] ? `無 (誤植為「${p['點數_misplaced']}」)` : '無 (漏填)');
 
-    if (wPoints > 0 && pPoints > 0 && wPoints === pPoints) {
-        fields['點數'] = { label: '點數', word: `${w['點數']} 點`, pdf: `${p['點數']} 點`, status: 'green', desc: '點數相符' };
-    } else if (wHasPoints && !pHasPoints) {
+    if (!wHasPoints && !pHasPoints) {
+        const misplacedHint = (w['點數_misplaced'] || p['點數_misplaced'])
+            ? `（欄位誤植為「${w['點數_misplaced'] || p['點數_misplaced']}」）`
+            : '';
         fields['點數'] = {
             label: '點數',
-            word: `${w['點數']} 點`,
-            pdf: '(空白待補)',
-            status: 'yellow',
-            desc: `PDF 點數欄位留白未填，Word 原稿為 ${w['點數']} 點`
-        };
-        hasYellow = true;
-    } else if (!wHasPoints && pHasPoints) {
-        fields['點數'] = {
-            label: '點數',
-            word: '(無)',
-            pdf: `${p['點數']} 點`,
-            status: 'yellow',
-            desc: `Word 原稿無點數，PDF 排版標註 ${p['點數']} 點`
-        };
-        hasYellow = true;
-    } else if (wPoints > 0 && pPoints > 0 && wPoints !== pPoints) {
-        fields['點數'] = {
-            label: '點數',
-            word: `${w['點數']} 點`,
-            pdf: `${p['點數']} 點`,
+            word: wordPointsDisplay,
+            pdf: pdfPointsDisplay,
             status: 'red',
-            desc: `點數不一致！Word 為 ${w['點數']} 點，但 PDF 為 ${p['點數']} 點`
+            desc: `缺少點數資料！Word 原稿與 PDF 皆漏填「點數」欄位${misplacedHint}`
         };
         hasRed = true;
+    } else if (wHasPoints && !pHasPoints) {
+        const misplacedHint = p['點數_misplaced'] ? `（PDF 誤植為「${p['點數_misplaced']}」）` : '';
+        fields['點數'] = {
+            label: '點數',
+            word: wordPointsDisplay,
+            pdf: pdfPointsDisplay,
+            status: 'red',
+            desc: `PDF 漏填點數！Word 原稿為 ${wordPointsDisplay}，但 PDF 未填寫「點數」${misplacedHint}`
+        };
+        hasRed = true;
+    } else if (!wHasPoints && pHasPoints) {
+        const misplacedHint = w['點數_misplaced'] ? `（Word 誤植為「${w['點數_misplaced']}」）` : '';
+        fields['點數'] = {
+            label: '點數',
+            word: wordPointsDisplay,
+            pdf: pdfPointsDisplay,
+            status: 'red',
+            desc: `Word 漏填點數！Word 原稿未填寫「點數」${misplacedHint}，PDF 為 ${pdfPointsDisplay}`
+        };
+        hasRed = true;
+    } else if (wPoints === pPoints) {
+        fields['點數'] = { label: '點數', word: wordPointsDisplay, pdf: pdfPointsDisplay, status: 'green', desc: '點數相符' };
     } else {
-        fields['點數'] = { label: '點數', word: '無', pdf: '無', status: 'green', desc: '雙方皆無點數' };
+        fields['點數'] = {
+            label: '點數',
+            word: wordPointsDisplay,
+            pdf: pdfPointsDisplay,
+            status: 'red',
+            desc: `點數不一致！Word 為 ${wordPointsDisplay}，但 PDF 為 ${pdfPointsDisplay}`
+        };
+        hasRed = true;
     }
 
-    // 5. 費用 (Rule 4: Mismatch is RED, blank in PDF draft is YELLOW)
+    // 5. 費用 (Rule 4 & Rule 10: Mandatory field; missing, misplaced, or mismatch is RED)
     const wPrice = parseInt(w['費用'], 10) || 0;
     const pPrice = parseInt(p['費用'], 10) || 0;
     const wHasPrice = Boolean(w['費用'] && String(w['費用']).trim() && wPrice > 0);
     const pHasPrice = Boolean(p['費用'] && String(p['費用']).trim() && pPrice > 0);
+    const wordPriceDisplay = wHasPrice ? `${wPrice.toLocaleString()} 元` : (w['費用_misplaced'] ? `無 (誤植為「${w['費用_misplaced']}」)` : '無 (漏填)');
+    const pdfPriceDisplay = pHasPrice ? `${pPrice.toLocaleString()} 元` : (p['費用_misplaced'] ? `無 (誤植為「${p['費用_misplaced']}」)` : '無 (漏填)');
 
-    if (wPrice > 0 && pPrice > 0 && wPrice === pPrice) {
-        fields['費用'] = { label: '費用', word: `${wPrice.toLocaleString()} 元`, pdf: `${pPrice.toLocaleString()} 元`, status: 'green', desc: '費用相符' };
-    } else if (wHasPrice && !pHasPrice) {
+    if (!wHasPrice && !pHasPrice) {
+        const misplacedHint = (w['費用_misplaced'] || p['費用_misplaced'])
+            ? `（欄位誤植為「${w['費用_misplaced'] || p['費用_misplaced']}」）`
+            : '';
         fields['費用'] = {
             label: '費用',
-            word: `${wPrice.toLocaleString()} 元`,
-            pdf: '(空白待補)',
-            status: 'yellow',
-            desc: `PDF 費用欄位留白未填，Word 原稿為 ${wPrice.toLocaleString()} 元`
-        };
-        hasYellow = true;
-    } else if (!wHasPrice && pHasPrice) {
-        fields['費用'] = {
-            label: '費用',
-            word: '(無)',
-            pdf: `${pPrice.toLocaleString()} 元`,
-            status: 'yellow',
-            desc: `Word 原稿無費用，PDF 排版標註 ${pPrice.toLocaleString()} 元`
-        };
-        hasYellow = true;
-    } else if (wPrice > 0 && pPrice > 0 && wPrice !== pPrice) {
-        fields['費用'] = {
-            label: '費用',
-            word: `${wPrice.toLocaleString()} 元`,
-            pdf: `${pPrice.toLocaleString()} 元`,
+            word: wordPriceDisplay,
+            pdf: pdfPriceDisplay,
             status: 'red',
-            desc: `費用不符！Word 為 ${wPrice.toLocaleString()} 元，PDF 為 ${pPrice.toLocaleString()} 元`
+            desc: `缺少費用資料！Word 原稿與 PDF 皆漏填「費用」欄位${misplacedHint}`
         };
         hasRed = true;
+    } else if (wHasPrice && !pHasPrice) {
+        const misplacedHint = p['費用_misplaced'] ? `（PDF 誤植為「${p['費用_misplaced']}」）` : '';
+        fields['費用'] = {
+            label: '費用',
+            word: wordPriceDisplay,
+            pdf: pdfPriceDisplay,
+            status: 'red',
+            desc: `PDF 漏填費用！Word 原稿為 ${wordPriceDisplay}，但 PDF 未填寫「費用」${misplacedHint}`
+        };
+        hasRed = true;
+    } else if (!wHasPrice && pHasPrice) {
+        const misplacedHint = w['費用_misplaced'] ? `（Word 誤植為「${w['費用_misplaced']}」）` : '';
+        fields['費用'] = {
+            label: '費用',
+            word: wordPriceDisplay,
+            pdf: pdfPriceDisplay,
+            status: 'red',
+            desc: `Word 漏填費用！Word 原稿未填寫「費用」${misplacedHint}，PDF 為 ${pdfPriceDisplay}`
+        };
+        hasRed = true;
+    } else if (wPrice === pPrice) {
+        fields['費用'] = { label: '費用', word: wordPriceDisplay, pdf: pdfPriceDisplay, status: 'green', desc: '費用相符' };
     } else {
-        fields['費用'] = { label: '費用', word: '-', pdf: '-', status: 'green', desc: '無費用資訊' };
+        fields['費用'] = {
+            label: '費用',
+            word: wordPriceDisplay,
+            pdf: pdfPriceDisplay,
+            status: 'red',
+            desc: `費用不符！Word 為 ${wordPriceDisplay}，PDF 為 ${pdfPriceDisplay}`
+        };
+        hasRed = true;
     }
 
     // 6. 教材
